@@ -1,0 +1,242 @@
+"""Codex app-server 通知 -> UnifiedEvent 转换。
+
+基于 openai-codex 0.1.0b3 实测结论（2026-06-10，见 Desktop/codex-sdk-test）：
+- turn 事件流元素是 Notification(method, payload)，必须按 method 字符串分发，
+  而非 payload 类型名（payload 可能是 UnknownNotification 兜底）
+- item/started 与 item/completed 的 payload.item 是 ThreadItem 联合类型（RootModel），
+  按 item.type 字段分流 commandExecution / fileChange / agentMessage 等
+- fileChange 审批请求 params 不含 diff 内容，diff 详情在 item/started 的
+  FileChangeThreadItem.changes（path/kind/diff）中，由 adapter 缓存供审批弹窗使用
+- turn/diff/updated 提供全 turn 聚合 unified diff，独立于审批通道
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from app.adapters.base import UnifiedEvent
+
+logger = logging.getLogger(__name__)
+
+ADAPTER_NAME = "codex"
+
+_OUTPUT_TRUNCATE = 2000
+
+
+def _unwrap_item(payload: Any) -> Any:
+    """ThreadItem 是 pydantic RootModel 联合，取 .root 拿到具体类型。"""
+    item = getattr(payload, "item", None)
+    return getattr(item, "root", item)
+
+
+def _diff_stats(diff_text: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            additions += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions += 1
+    return additions, deletions
+
+
+def _file_changes_payload(item: Any) -> list[dict[str, Any]]:
+    """FileChangeThreadItem.changes -> [{path, kind, diff, additions, deletions}]"""
+    changes: list[dict[str, Any]] = []
+    for change in getattr(item, "changes", None) or []:
+        diff_text = str(getattr(change, "diff", "") or "")
+        additions, deletions = _diff_stats(diff_text)
+        kind = getattr(change, "kind", "")
+        changes.append({
+            "path": str(getattr(change, "path", "")),
+            "kind": getattr(kind, "value", None) or str(kind),
+            "diff": diff_text,
+            "additions": additions,
+            "deletions": deletions,
+        })
+    return changes
+
+
+def _command_event(item: Any, *, phase: str) -> UnifiedEvent:
+    command = str(getattr(item, "command", "") or "")
+    cwd = getattr(item, "cwd", "")
+    cwd = getattr(cwd, "root", cwd)  # cwd 是 RootModel 包装的路径字符串
+    data: dict[str, Any] = {
+        "tool_name": "shell",
+        "status": phase,
+        "summary": command[:300],
+        "tool_input": command[:500],
+        "cwd": str(cwd or ""),
+        "item_id": str(getattr(item, "id", "") or ""),
+    }
+    if phase != "running":
+        exit_code = getattr(item, "exit_code", None)
+        data["exit_code"] = exit_code
+        data["status"] = "success" if exit_code == 0 else "failed"
+        data["duration_ms"] = getattr(item, "duration_ms", None)
+        output = str(getattr(item, "aggregated_output", "") or "")
+        if output:
+            data["output"] = output[:_OUTPUT_TRUNCATE]
+    return UnifiedEvent(type="tool_call", data=data, adapter=ADAPTER_NAME)
+
+
+def _extract_token_usage(payload: Any) -> dict[str, Any] | None:
+    """tokenUsage 通知 payload -> 平铺 dict（字段名保持 SDK 原样，驼峰）。
+
+    实测 payload 结构可能是 {usage: {...}} 包装或平铺，宽松提取数值字段。
+    """
+    for candidate in (getattr(payload, "usage", None), payload):
+        if candidate is None:
+            continue
+        data = candidate if isinstance(candidate, dict) else getattr(candidate, "__dict__", None)
+        if not isinstance(data, dict):
+            continue
+        usage = {k: v for k, v in data.items() if isinstance(v, (int, float))}
+        if usage:
+            return usage
+    return None
+
+
+def convert_notification(
+    notification: Any,
+    file_change_items: dict[str, Any],
+    final_parts: list[str],
+    turn_state: dict[str, Any] | None = None,
+) -> list[UnifiedEvent]:
+    """单条 turn 通知转换为 0..n 个 UnifiedEvent。
+
+    file_change_items: item_id -> changes 摘要缓存（审批 handler 跨线程读取）
+    final_parts: agentMessage 增量累积（turn/completed 时作为最终回复）
+    turn_state: turn 级累积状态（tokenUsage 等），turn/completed 时并入终态事件
+    """
+    method = str(getattr(notification, "method", "") or "")
+    payload = getattr(notification, "payload", None)
+    state = turn_state if turn_state is not None else {}
+
+    # token 计量通知（如 thread/tokenUsage/updated）：缓存最新值，终态统一携带
+    if "tokenusage" in method.lower():
+        usage = _extract_token_usage(payload)
+        if usage:
+            state["usage"] = usage
+        return []
+
+    if method == "item/agentMessage/delta":
+        delta = str(getattr(payload, "delta", "") or "")
+        if not delta:
+            return []
+        final_parts.append(delta)
+        # 正文走 text_delta 通道（is_delta 走字符拼接）
+        return [UnifiedEvent(
+            type="text_delta",
+            data={"text": delta, "is_delta": True},
+            adapter=ADAPTER_NAME,
+        )]
+
+    # reasoning 增量（item/reasoning/delta 等）：思考通道，前端折叠展示
+    if "reasoning" in method and method.endswith("/delta"):
+        delta = str(getattr(payload, "delta", "") or "")
+        if not delta:
+            return []
+        return [UnifiedEvent(
+            type="thinking",
+            data={"text": delta, "is_thinking": True, "is_delta": True},
+            adapter=ADAPTER_NAME,
+        )]
+
+    if method == "item/started":
+        item = _unwrap_item(payload)
+        item_type = str(getattr(item, "type", "") or "")
+        if item_type == "commandExecution":
+            return [_command_event(item, phase="running")]
+        if item_type == "fileChange":
+            changes = _file_changes_payload(item)
+            item_id = str(getattr(item, "id", "") or "")
+            if item_id:
+                file_change_items[item_id] = changes
+        return []
+
+    if method == "item/completed":
+        item = _unwrap_item(payload)
+        item_type = str(getattr(item, "type", "") or "")
+        if item_type == "commandExecution":
+            return [_command_event(item, phase="completed")]
+        if item_type == "fileChange":
+            changes = _file_changes_payload(item)
+            item_id = str(getattr(item, "id", "") or "")
+            if item_id:
+                file_change_items[item_id] = changes
+            if not changes:
+                return []
+            status = getattr(item, "status", "")
+            return [UnifiedEvent(
+                type="file_change",
+                data={
+                    "path": changes[0]["path"],
+                    "change_type": changes[0]["kind"],
+                    "changes": changes,
+                    "status": getattr(status, "value", None) or str(status),
+                    "item_id": item_id,
+                },
+                adapter=ADAPTER_NAME,
+            )]
+        return []
+
+    if method == "turn/diff/updated":
+        diff_text = str(getattr(payload, "diff", "") or "")
+        if not diff_text:
+            return []
+        additions, deletions = _diff_stats(diff_text)
+        return [UnifiedEvent(
+            type="diff_update",
+            data={
+                "summary": f"代码变更（+{additions}/-{deletions}）",
+                "files": [],
+                "unified_diff": diff_text,
+                "additions": additions,
+                "deletions": deletions,
+            },
+            adapter=ADAPTER_NAME,
+        )]
+
+    if method == "turn/completed":
+        turn = getattr(payload, "turn", None)
+        status = getattr(turn, "status", None)
+        status_value = getattr(status, "value", None) or str(status or "")
+        result_text = "".join(final_parts)
+        if status_value == "failed":
+            error = getattr(turn, "error", None)
+            message = str(getattr(error, "message", "") or "turn failed")
+            return [UnifiedEvent(
+                type="error",
+                data={"error": message, "turn_id": str(getattr(turn, "id", "") or "")},
+                adapter=ADAPTER_NAME,
+            )]
+        return [UnifiedEvent(
+            type="completed",
+            data={
+                "result": result_text,
+                "full_text": result_text,
+                "status": status_value,
+                "interrupted": status_value == "interrupted",
+                "turn_id": str(getattr(turn, "id", "") or ""),
+                "usage": state.get("usage"),
+            },
+            adapter=ADAPTER_NAME,
+        )]
+
+    if method == "error":
+        params = getattr(payload, "params", None)
+        message = ""
+        if isinstance(params, dict):
+            message = str(params.get("message", "") or params)
+        else:
+            message = str(getattr(payload, "message", "") or payload)
+        return [UnifiedEvent(
+            type="error",
+            data={"error": message},
+            adapter=ADAPTER_NAME,
+        )]
+
+    # plan 等其余通知：不进业务流（event store 由 executor 统一落）
+    return []

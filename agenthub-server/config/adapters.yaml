@@ -1,0 +1,47 @@
+adapters:
+  claude-code:
+    enabled: true
+    module: app.adapters.claude_code.adapter
+    class: ClaudeCodeAdapter
+    config:
+      default_model: null
+      default_permission_mode: acceptEdits
+      default_allowed_tools:
+        - Read
+        - Glob
+        - Grep
+        - Edit
+        - Write
+        - Bash
+      # 设置来源：user = ~/.claude 全局（CLAUDE.md / settings / skills），
+      # project = workspace 内项目级（CLAUDE.md / .claude/）；
+      # 置空列表 [] 恢复 SDK 完全隔离模式
+      setting_sources:
+        - user
+        - project
+      # 技能加载："all" 加载 setting_sources 内全部 skills；
+      # 也可列出技能名数组；null 不启用
+      skills: all
+
+  codex:
+    enabled: true
+    module: app.adapters.codex.adapter
+    class: CodexAdapter
+    config:
+      default_model: null
+      # 留空使用 openai-codex-cli-bin 内置 pinned runtime
+      codex_bin: null
+      # 人工审批等待超时（秒），超时按拒绝处理
+      approval_timeout_s: 600
+      # 命令审批白名单前置：ALLOWED 自动放行 / BLOCKED 自动拦截 / 其余人工审批
+      whitelist_precheck: true
+
+  # 无 API Key 环境的全链路演示/冒烟执行器（路由优先级最低，
+  # 仅在真实 SDK 均不可用或 Agent 显式指定 adapter_type=mock 时被选中）
+  mock:
+    enabled: true
+    module: app.adapters.mock.adapter
+    class: MockAdapter
+    config:
+      approval_timeout_s: 120
+      step_delay_s: 0.05

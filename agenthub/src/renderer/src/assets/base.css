@@ -1,0 +1,13 @@
+/* AgentHub base reset — minimal, no theme variables (all tokens live in main.css) */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+ul {
+  list-style: none;
+}

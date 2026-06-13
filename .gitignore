@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Build output
+dist/
+out/
+build/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Electron
+release/
+
+# Logs
+*.log
+npm-debug.log*
+
+# MiMo-Code（第三方参考项目，不纳入版本管理）
+MiMo-Code/
+
+# Cursor/Windsurf
+.cursor/
+
+# 文档和资源（本地资料不上传）
+docs/
+logos/

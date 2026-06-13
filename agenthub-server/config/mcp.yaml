@@ -1,0 +1,27 @@
+# AgentHub 统一 MCP 服务器配置（一份配置，双执行器生效）
+#
+# - claude-code：local -> stdio / remote -> http，直传 claude-agent-sdk
+# - codex：local 转换为 app-server 子进程 config_overrides；remote 暂不支持（跳过）
+#
+# 每个条目经 Pydantic Schema 校验（app/config.py），非法条目告警跳过不阻断启动。
+# 通用字段：enabled（默认 true）、timeout（毫秒，1000-600000，默认 5000）
+#
+# local 型（缺 type 字段时默认 local，兼容标准 mcp.json 的 command/args/env）：
+#   filesystem:
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+#   fetch:
+#     command: uvx
+#     args: ["mcp-server-fetch"]
+#     env:
+#       HTTP_PROXY: http://127.0.0.1:7890
+#     enabled: true
+#
+# remote 型（Streamable HTTP）：
+#   github:
+#     type: remote
+#     url: https://api.githubcopilot.com/mcp/
+#     headers:
+#       Authorization: Bearer ${GITHUB_TOKEN}
+
+mcp_servers: {}
