@@ -49,6 +49,7 @@ def _to_out(r: AgentRecord) -> AgentOut:
     return AgentOut(
         id=r.id, name=r.name, role=r.role,
         description=r.description or "", skills=r.skills or "",
+        skill_specs=r.skill_specs or [],
         system_prompt=r.system_prompt or "", group=r.group or "",
         adapter_type=r.adapter_type, model=r.model or "",
         context_window=r.context_window,
@@ -91,6 +92,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)) -> list[AgentOutWithAd
             role=r.role,
             description=r.description or "",
             skills=r.skills or "",
+            skill_specs=r.skill_specs or [],
             system_prompt=r.system_prompt or "",
             group=r.group or "",
             adapter_type=r.adapter_type or active_adapter or "",
@@ -112,6 +114,7 @@ async def create_agent(data: AgentCreate, db: AsyncSession = Depends(get_db)) ->
         role=data.role,
         description=data.description,
         skills=data.skills,
+        skill_specs=[s.model_dump() for s in data.skill_specs],
         system_prompt=data.system_prompt,
         group=data.group,
         adapter_type=data.adapter_type,

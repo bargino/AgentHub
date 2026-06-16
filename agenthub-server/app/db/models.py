@@ -81,6 +81,10 @@ class AgentRecord(Base):
     role: Mapped[str] = mapped_column(String(32))
     description: Mapped[str] = mapped_column(Text, default="")
     skills: Mapped[str] = mapped_column(Text, default="")
+    # 结构化能力清单（借鉴 A2A Agent Card）：[{name, description, whenToUse,
+    # whenNotToUse, inputs, outputs, examples[]}]，供 Orchestrator 路由时按结构化
+    # 触发条件选 agent；空 = 回退自由文本 skills。
+    skill_specs: Mapped[list] = mapped_column(JSON, default=list)
     # 角色系统提示词（来源：agents/*.md 正文；空 = 回退 prompts.py 内置/模板）
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     group: Mapped[str] = mapped_column(String(64), default="")
@@ -169,6 +173,33 @@ class AgentEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class BlackboardEntry(Base):
+    """会话级多 Agent 共享黑板（#10：方案/结论/共享事实，按主题 upsert）。
+
+    并行多方案各 attempt 写 proposal:<task>:<i>，裁决写 decision:<task>；
+    下游经 context_builder 注入共享黑板。(conversation_id, key) 唯一，按主题 upsert。
+    """
+
+    __tablename__ = "blackboard"
+    __table_args__ = (
+        Index("ix_blackboard_conv_key", "conversation_id", "key", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("conversations.id", ondelete="CASCADE")
+    )
+    key: Mapped[str] = mapped_column(String(200))
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    agent_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # #7 串联本轮请求，便于按 trace 回看黑板写入
+    trace_id: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class Workspace(Base):
     """会话隔离工作区。"""
 
@@ -224,4 +255,9 @@ class Approval(Base):
     status: Mapped[str] = mapped_column(String(16), default="pending")
     # 适配器层审批请求 ID（用于回传决策给 adapter）
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 发起审批的适配器名（registry key）：持久化以便进程重启后仍能回传决策给 adapter，
+    # 避免「内存协调器映射丢失 -> UI 显示已通过但 agent 实际被拒/挂起」的静默分叉
+    adapter_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # 关联的代码变更 Diff（apply_diff 审批指向对应 DiffRecord，供前端审查界面联动展示）
+    diff_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

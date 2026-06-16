@@ -90,7 +90,7 @@ class MockAdapter(ICodeAdapter):
                     "approval_request",
                     {
                         "request_id": request_id,
-                        "action_type": "apply_edits",
+                        "action_type": "apply_diff",
                         "summary": "应用 Mock 演示变更",
                     },
                     risk="medium",

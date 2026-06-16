@@ -25,7 +25,9 @@ class CamelModel(BaseModel):
 
 MessageType = Literal["user", "agent", "thinking", "system", "tool", "approval", "error"]
 TaskStatus = Literal["pending", "running", "waiting_approval", "success", "failed", "cancelled"]
-AgentRole = str
+AgentRole = Literal["orchestrator", "planner", "coder", "reviewer", "deployer", "preview"]
+# 为保持向后兼容，允许任意字符串的角色
+AgentRoleAny = str
 RiskLevel = Literal["low", "medium", "high"]
 ConversationStatus = Literal["idle", "running", "waiting_approval", "archived"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -116,6 +118,8 @@ class ApprovalOut(CamelModel):
     summary: str = ""
     risk_level: RiskLevel = "low"
     status: ApprovalStatus = "pending"
+    # 关联的代码变更 Diff（apply_diff 审批联动展示对应 diff；其它动作为 None）
+    diff_id: Optional[str] = None
 
 
 class ProviderConfig(CamelModel):
@@ -125,12 +129,29 @@ class ProviderConfig(CamelModel):
     auth_token: str = ""
 
 
+class SkillSpec(CamelModel):
+    """结构化能力条目（借鉴 A2A Agent Card 的 skill 描述）。
+
+    供 Orchestrator 路由时按「何时该派 / 不该派」结构化选 agent，
+    比自由文本 description 更可机读、路由更准。除 name 外均可缺省。
+    """
+
+    name: str
+    description: str = ""
+    when_to_use: str = ""
+    when_not_to_use: str = ""
+    inputs: str = ""
+    outputs: str = ""
+    examples: list[str] = Field(default_factory=list)
+
+
 class AgentOut(CamelModel):
     id: str
     name: str
     role: str = Field(..., description="Agent 角色标识，如 orchestrator/planner/coder/reviewer/deployer")
     description: str = ""
     skills: str = ""
+    skill_specs: list[SkillSpec] = Field(default_factory=list)
     system_prompt: str = ""
     group: str = ""
     adapter_type: str = ""
@@ -164,9 +185,22 @@ class ConversationUpdate(CamelModel):
     settings: Optional[dict[str, Any]] = None
 
 
+class AttachmentIn(CamelModel):
+    """用户消息多模态附件（参照 MiMo-Code FilePart）。
+
+    url 为 base64 data URL（data:<mime>;base64,...，前端贴图/上传产生）；
+    后端解码落盘后以统一 ref {type,mime,path,filename} 存入消息 meta 并透传 adapter。
+    """
+
+    type: Literal["image"] = "image"
+    url: str
+    filename: Optional[str] = None
+
+
 class MessageCreate(CamelModel):
     content: str
     target_agent: Optional[AgentRole] = None
+    attachments: list[AttachmentIn] = Field(default_factory=list)
 
 
 class AgentCreate(CamelModel):
@@ -174,6 +208,7 @@ class AgentCreate(CamelModel):
     role: str
     description: str = ""
     skills: str = ""
+    skill_specs: list[SkillSpec] = Field(default_factory=list)
     system_prompt: str = ""
     group: str = ""
     adapter_type: str = ""
@@ -189,6 +224,7 @@ class AgentUpdate(CamelModel):
     role: Optional[str] = None
     description: Optional[str] = None
     skills: Optional[str] = None
+    skill_specs: Optional[list[SkillSpec]] = None
     system_prompt: Optional[str] = None
     group: Optional[str] = None
     adapter_type: Optional[str] = None
@@ -231,6 +267,7 @@ WSEventType = Literal[
     "diff.generated",
     "approval.required",
     "approval.resolved",
+    "approval.resolve_failed",
     "task.status.changed",
     "conversation.updated",
     "preview.started",

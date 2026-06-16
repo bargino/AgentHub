@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  X,
   RefreshCw,
   GitBranch,
   FileText,
   FolderOpen,
+  FolderTree,
   History,
   FileDiff,
   Loader2,
   Check
 } from 'lucide-react'
 import { useAppStore } from '../../store'
-import { ResizeHandle } from '../ui/ResizeHandle'
 import { HttpError } from '../../services/http'
+import { t, useT } from '../../i18n'
 import {
   getGitStatus,
   getGitDiff,
@@ -21,13 +21,15 @@ import {
   type GitStatusFile,
   type GitCommit
 } from '../../services/api'
+import { WorkspaceExplorer } from './WorkspaceExplorer'
 
-type Tab = 'changes' | 'diff' | 'log'
+type Tab = 'explorer' | 'changes' | 'diff' | 'log'
 
-const TABS: { key: Tab; label: string; icon: typeof FileText }[] = [
-  { key: 'changes', label: '变更', icon: FileText },
-  { key: 'diff', label: 'Diff', icon: FileDiff },
-  { key: 'log', label: '提交', icon: History }
+const TABS: { key: Tab; labelKey: string; icon: typeof FileText }[] = [
+  { key: 'explorer', labelKey: 'git.tab.explorer', icon: FolderTree },
+  { key: 'changes', labelKey: 'git.tab.changes', icon: FileText },
+  { key: 'diff', labelKey: 'Diff', icon: FileDiff },
+  { key: 'log', labelKey: 'git.tab.log', icon: History }
 ]
 
 /** porcelain 两位状态码 -> 视觉（优先未暂存位） */
@@ -105,10 +107,10 @@ function timeAgo(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const sec = Math.floor((Date.now() - d.getTime()) / 1000)
-  if (sec < 60) return '刚刚'
-  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`
-  if (sec < 86400) return `${Math.floor(sec / 3600)} 小时前`
-  return `${Math.floor(sec / 86400)} 天前`
+  if (sec < 60) return t('git.time.justNow')
+  if (sec < 3600) return t('git.time.minutesAgo', { n: Math.floor(sec / 60) })
+  if (sec < 86400) return t('git.time.hoursAgo', { n: Math.floor(sec / 3600) })
+  return t('git.time.daysAgo', { n: Math.floor(sec / 86400) })
 }
 
 function EmptyHint({
@@ -136,17 +138,17 @@ function EmptyHint({
 }
 
 export function GitPanel(): React.JSX.Element | null {
-  const open = useAppStore((s) => s.gitPanelOpen)
   const activeId = useAppStore((s) => s.activeConversationId)
 
-  if (!open || !activeId) return null
+  if (!activeId) return null
 
   // key 重挂载：切换会话时加载态与数据随之重置
   return <GitPanelBody key={activeId} cid={activeId} />
 }
 
 function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
-  const [tab, setTab] = useState<Tab>('changes')
+  const tr = useT()
+  const [tab, setTab] = useState<Tab>('explorer')
   const [loading, setLoading] = useState(true)
   const [noWorkspace, setNoWorkspace] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -171,7 +173,7 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
         setDiff('')
         setCommits([])
       } else {
-        setError('加载失败，请确认 AgentHub Server 已启动')
+        setError(t('git.loadError'))
       }
     } finally {
       setLoading(false)
@@ -195,14 +197,9 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
 
   return (
     <div
-      className="relative flex flex-col shrink-0 panel-slide-right"
-      style={{
-        width: 'var(--right-panel-width)',
-        background: 'var(--color-bg-container)',
-        borderLeft: '1px solid var(--color-border)'
-      }}
+      className="flex flex-col h-full min-h-0"
+      style={{ background: 'var(--color-bg-container)' }}
     >
-      <ResizeHandle />
       {/* header */}
       <div
         className="flex items-center justify-between shrink-0 px-4 py-3"
@@ -213,13 +210,13 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
             className="text-sm font-semibold shrink-0"
             style={{ color: 'var(--color-text-primary)' }}
           >
-            文件
+            {tr('git.files')}
           </span>
           {status?.available && status.branch && (
             <span
               className="flex items-center gap-1 text-xs truncate"
               style={{ color: 'var(--color-text-secondary)' }}
-              title={`分支 ${status.branch}`}
+              title={tr('git.branch', { name: status.branch })}
             >
               <GitBranch size={12} className="shrink-0" />
               {status.branch}
@@ -229,17 +226,11 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
         <div className="flex items-center gap-0.5 shrink-0">
           <button
             onClick={handleRefresh}
-            title="刷新"
+            title={tr('git.refresh')}
             className="btn-ghost flex items-center justify-center w-7 h-7 rounded-md"
             style={{ color: 'var(--color-text-secondary)' }}
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          </button>
-          <button
-            onClick={() => useAppStore.getState().toggleGitPanel()}
-            className="btn-ghost flex items-center justify-center w-7 h-7 rounded-md"
-          >
-            <X size={16} style={{ color: 'var(--color-text-secondary)' }} />
           </button>
         </div>
       </div>
@@ -249,7 +240,7 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
         className="flex items-center gap-1 px-3 pt-2 pb-0 shrink-0"
         style={{ borderBottom: '1px solid var(--color-border-light)' }}
       >
-        {TABS.map(({ key, label, icon: Icon }) => {
+        {TABS.map(({ key, labelKey, icon: Icon }) => {
           const active = tab === key
           const count = key === 'changes' && files.length > 0 ? ` ${files.length}` : ''
           return (
@@ -265,134 +256,140 @@ function GitPanelBody({ cid }: { cid: string }): React.JSX.Element {
               }}
             >
               <Icon size={13} />
-              {label}
+              {labelKey === 'Diff' ? 'Diff' : tr(labelKey)}
               {count}
             </button>
           )
         })}
       </div>
 
-      {/* body */}
-      <div className="flex-1 overflow-y-auto">
-        {error && (
-          <div
-            className="mx-4 mt-3 px-3 py-2 rounded-lg text-xs"
-            style={{ background: 'var(--color-error-bg)', color: 'var(--color-error)' }}
-          >
-            {error}
-          </div>
-        )}
+      {/* body：explorer 自管滚动与数据，其余 git 标签共用下方容器 */}
+      {tab === 'explorer' ? (
+        <div className="flex-1 overflow-hidden">
+          <WorkspaceExplorer cid={cid} />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          {error && (
+            <div
+              className="mx-4 mt-3 px-3 py-2 rounded-lg text-xs"
+              style={{ background: 'var(--color-error-bg)', color: 'var(--color-error)' }}
+            >
+              {error}
+            </div>
+          )}
 
-        {noWorkspace ? (
-          <EmptyHint
-            icon={FolderOpen}
-            text="工作区尚未创建"
-            sub="发送第一条任务消息后，AgentHub 会为本会话创建 workspace"
-          />
-        ) : !status && loading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2
-              size={18}
-              className="animate-spin"
-              style={{ color: 'var(--color-text-tertiary)' }}
+          {noWorkspace ? (
+            <EmptyHint
+              icon={FolderOpen}
+              text={tr('git.noWorkspace')}
+              sub={tr('git.noWorkspaceSub')}
             />
-          </div>
-        ) : status && !status.available ? (
-          <EmptyHint icon={GitBranch} text="非 git 工作区" sub={status.error} />
-        ) : (
-          <>
-            {tab === 'changes' &&
-              (files.length === 0 ? (
-                <EmptyHint icon={Check} text="工作区干净" sub="没有未提交的变更" />
-              ) : (
-                <div className="py-2">
-                  {groups.map(({ dir, items }) => (
-                    <div key={dir || '.'} className="mb-1">
-                      <div
-                        className="flex items-center gap-1.5 px-4 py-1 text-[11px] truncate"
-                        style={{ color: 'var(--color-text-tertiary)' }}
-                        title={dir || '根目录'}
-                      >
-                        <FolderOpen size={11} className="shrink-0" />
-                        {dir || '根目录'}
-                      </div>
-                      {items.map((f) => {
-                        const badge = fileBadge(f)
-                        return (
-                          <div
-                            key={f.path}
-                            className="hover-spotlight flex items-center gap-2 pl-8 pr-4 py-1.5 cursor-default"
-                            title={f.path}
-                          >
-                            <FileText
-                              size={12}
-                              className="shrink-0"
-                              style={{ color: 'var(--color-text-tertiary)' }}
-                            />
-                            <span
-                              className="flex-1 text-xs truncate"
-                              style={{ color: 'var(--color-text-primary)' }}
-                            >
-                              {basename(f.path)}
-                            </span>
-                            <span
-                              className="shrink-0 text-[11px] font-semibold w-4 text-center"
-                              style={{ color: badge.color }}
-                            >
-                              {badge.label}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ))}
-                </div>
-              ))}
-
-            {tab === 'diff' &&
-              (diff.trim() === '' ? (
-                <EmptyHint icon={FileDiff} text="暂无差异" sub="工作区与 HEAD 一致" />
-              ) : (
-                <DiffText text={diff} />
-              ))}
-
-            {tab === 'log' &&
-              (commits.length === 0 ? (
-                <EmptyHint icon={History} text="暂无提交记录" />
-              ) : (
-                <div className="py-2">
-                  {commits.map((c) => (
-                    <div key={c.hash} className="hover-spotlight px-4 py-2 cursor-default">
-                      <div
-                        className="text-xs truncate"
-                        style={{ color: 'var(--color-text-primary)' }}
-                        title={c.subject}
-                      >
-                        {c.subject}
-                      </div>
-                      <div
-                        className="flex items-center gap-2 mt-0.5 text-[11px]"
-                        style={{ color: 'var(--color-text-tertiary)' }}
-                      >
-                        <span
-                          className="px-1 rounded"
-                          style={{
-                            fontFamily: "'JetBrains Mono', Consolas, monospace",
-                            background: 'var(--color-bg-spotlight)'
-                          }}
+          ) : !status && loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2
+                size={18}
+                className="animate-spin"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              />
+            </div>
+          ) : status && !status.available ? (
+            <EmptyHint icon={GitBranch} text={tr('git.notGitRepo')} sub={status.error} />
+          ) : (
+            <>
+              {tab === 'changes' &&
+                (files.length === 0 ? (
+                  <EmptyHint icon={Check} text={tr('git.clean')} sub={tr('git.cleanSub')} />
+                ) : (
+                  <div className="py-2">
+                    {groups.map(({ dir, items }) => (
+                      <div key={dir || '.'} className="mb-1">
+                        <div
+                          className="flex items-center gap-1.5 px-4 py-1 text-[11px] truncate"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                          title={dir || tr('git.rootDir')}
                         >
-                          {c.hash}
-                        </span>
-                        <span className="truncate">{c.author}</span>
-                        <span className="ml-auto shrink-0">{timeAgo(c.date)}</span>
+                          <FolderOpen size={11} className="shrink-0" />
+                          {dir || tr('git.rootDir')}
+                        </div>
+                        {items.map((f) => {
+                          const badge = fileBadge(f)
+                          return (
+                            <div
+                              key={f.path}
+                              className="hover-spotlight flex items-center gap-2 pl-8 pr-4 py-1.5 cursor-default"
+                              title={f.path}
+                            >
+                              <FileText
+                                size={12}
+                                className="shrink-0"
+                                style={{ color: 'var(--color-text-tertiary)' }}
+                              />
+                              <span
+                                className="flex-1 text-xs truncate"
+                                style={{ color: 'var(--color-text-primary)' }}
+                              >
+                                {basename(f.path)}
+                              </span>
+                              <span
+                                className="shrink-0 text-[11px] font-semibold w-4 text-center"
+                                style={{ color: badge.color }}
+                              >
+                                {badge.label}
+                              </span>
+                            </div>
+                          )
+                        })}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              ))}
-          </>
-        )}
-      </div>
+                    ))}
+                  </div>
+                ))}
+
+              {tab === 'diff' &&
+                (diff.trim() === '' ? (
+                  <EmptyHint icon={FileDiff} text={tr('git.noDiff')} sub={tr('git.noDiffSub')} />
+                ) : (
+                  <DiffText text={diff} />
+                ))}
+
+              {tab === 'log' &&
+                (commits.length === 0 ? (
+                  <EmptyHint icon={History} text={tr('git.noCommits')} />
+                ) : (
+                  <div className="py-2">
+                    {commits.map((c) => (
+                      <div key={c.hash} className="hover-spotlight px-4 py-2 cursor-default">
+                        <div
+                          className="text-xs truncate"
+                          style={{ color: 'var(--color-text-primary)' }}
+                          title={c.subject}
+                        >
+                          {c.subject}
+                        </div>
+                        <div
+                          className="flex items-center gap-2 mt-0.5 text-[11px]"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                        >
+                          <span
+                            className="px-1 rounded"
+                            style={{
+                              fontFamily: "'JetBrains Mono', Consolas, monospace",
+                              background: 'var(--color-bg-spotlight)'
+                            }}
+                          >
+                            {c.hash}
+                          </span>
+                          <span className="truncate">{c.author}</span>
+                          <span className="ml-auto shrink-0">{timeAgo(c.date)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

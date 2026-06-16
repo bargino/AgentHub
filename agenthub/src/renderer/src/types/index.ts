@@ -8,6 +8,8 @@ export type TaskStatus =
   | 'cancelled'
 export type AgentRole = string
 export type RiskLevel = 'low' | 'medium' | 'high'
+/** 右侧停靠区单实例 tab：审查（diff+审批合一）/ 任务 / Git / 预览 */
+export type RightTab = 'review' | 'task' | 'git' | 'preview'
 
 export interface Conversation {
   id: string
@@ -51,6 +53,8 @@ export interface Message {
     cwd?: string
     thinkingMs?: number
   }
+  /** 多模态图片附件（前端用 base64 data URL 展示缩略图；当前会话内有效） */
+  attachments?: { type: 'image'; url: string; filename?: string }[]
 }
 
 export interface Task {
@@ -94,6 +98,8 @@ export interface Approval {
   summary: string
   riskLevel: RiskLevel
   status: 'pending' | 'approved' | 'rejected'
+  /** 关联的代码变更 Diff（apply_diff 审批联动展示对应 diff）；其它动作为空 */
+  diffId?: string | null
 }
 
 export interface ProviderConfig {

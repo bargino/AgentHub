@@ -5,10 +5,10 @@
 （category="conversation_summary"，key=conversation_id），
 经 context_builder / engine 作为前缀注入后续上下文。
 
-同一次 LLM 调用双产出（借鉴 MiMo-Code memory flush 思想）：摘要正文 +
-跨会话仍有效的项目级记忆条目（tech_stack / conventions / decision），
-后者写入 project_knowledge 对应类目，经 render_project_context 跨会话注入。
-LLM 不可用时回退到简单截断策略（无记忆条目产出）。
+#2 hybrid memory 后只保留会话滚动摘要（compaction 层）；项目级知识不再由此
+蒸馏写库，改由 #9a 文档记忆（AGENTHUB.md / progress.md）按需沉淀。
+parse_summary_output 仍保留对 ===MEMORY=== 双产出的兼容解析（供历史数据/单测）。
+LLM 不可用时回退到简单截断策略。
 """
 
 from __future__ import annotations
@@ -55,18 +55,10 @@ SUMMARY_PROMPT = """请将以下对话历史（含可能存在的既往摘要）
 ### 相关文件
 涉及的关键文件/目录路径（仅列高频或核心项）
 
-摘要之后，另起一行输出 `===MEMORY===` 分隔标记，再输出一个 JSON 数组：\
-从对话中提炼**跨会话仍然有效**的项目级事实（不超过 5 条），格式
-[{{"category": "tech_stack|conventions|decision", "key": "简短标识", "value": "事实内容"}}]。
-- tech_stack：项目使用的语言/框架/工具链事实
-- conventions：团队明确约定的规范（命名、目录、流程）
-- decision：已拍板的技术决策及理由
-仅收录明确确认过的事实；没有可沉淀内容时输出 []。
-
 对话历史：
 {history}
 
-只输出模板正文 + 分隔标记 + JSON 数组，不要任何额外前缀或解释。"""
+只输出模板正文，不要任何额外前缀或解释。"""
 
 
 def parse_summary_output(raw: str) -> tuple[str, list[dict[str, str]]]:
@@ -126,6 +118,7 @@ async def summarize_entries(entries: list[MemoryEntry]) -> tuple[str, list[dict[
                 workspace_path=".",
                 approval_mode=UnifiedApprovalMode.AUTO,
                 sandbox_level=UnifiedSandboxLevel.READ_ONLY,
+                model=adapter.light_model,  # #6 摘要走轻模型（未配置则回退默认）
             )
             full_text: list[str] = []
             async for event in adapter.execute(ctx):
@@ -192,7 +185,9 @@ async def compress_if_needed(
     if old_summary:
         entries.insert(0, MemoryEntry(role="system", content=f"[既往摘要] {old_summary}"))
 
-    summary, memory_items = await summarize_entries(entries)
+    # #2 hybrid memory：只保留会话滚动摘要（compaction 层），不再蒸馏
+    # tech_stack/conventions/decision 写库（项目级知识改由 #9a 文档记忆按需沉淀）
+    summary, _ = await summarize_entries(entries)
     await project_memory.remember(
         session,
         project_name,
@@ -200,18 +195,4 @@ async def compress_if_needed(
         key=conversation_id,
         value=summary,
     )
-    # 项目级记忆沉淀（tech_stack / conventions / decision），跨会话注入
-    for item in memory_items:
-        await project_memory.remember(
-            session,
-            project_name,
-            category=item["category"],
-            key=item["key"],
-            value=item["value"],
-        )
-    if memory_items:
-        logger.info(
-            "Project memory distilled: %s items for %s",
-            len(memory_items), project_name,
-        )
     return True

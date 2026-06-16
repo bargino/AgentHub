@@ -7,12 +7,12 @@ interface StatusDotProps {
   className?: string
 }
 
-const STATUS_CONFIG: Record<StatusType, { color: string; label: string; pulse: boolean }> = {
-  online: { color: 'var(--color-success)', label: '在线', pulse: false },
-  running: { color: 'var(--color-brand)', label: '运行中', pulse: true },
-  idle: { color: 'var(--color-warning)', label: '空闲', pulse: false },
-  error: { color: 'var(--color-error)', label: '错误', pulse: false },
-  offline: { color: 'var(--color-text-tertiary)', label: '离线', pulse: false }
+const STATUS_CONFIG: Record<StatusType, { color: string; labelKey: string; pulse: boolean }> = {
+  online: { color: 'var(--color-success)', labelKey: 'common.status.online', pulse: false },
+  running: { color: 'var(--color-brand)', labelKey: 'common.status.running', pulse: true },
+  idle: { color: 'var(--color-warning)', labelKey: 'common.status.idle', pulse: false },
+  error: { color: 'var(--color-error)', labelKey: 'common.status.error', pulse: false },
+  offline: { color: 'var(--color-text-tertiary)', labelKey: 'common.status.offline', pulse: false }
 }
 
 const DOT_SIZE = { sm: 6, md: 8 }

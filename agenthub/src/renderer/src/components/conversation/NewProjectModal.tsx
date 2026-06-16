@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
-import { FolderOpen, FilePlus, X, ArrowLeft, Check, Lock } from 'lucide-react'
+import { FolderOpen, FilePlus, Check, Lock } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { Avatar } from '../ui/Avatar'
+import { Modal } from '../ui/Modal'
+import { useT } from '../../i18n'
 import type { Agent } from '../../types'
 
 type Step = 'choose' | 'blank-form' | 'folder-form'
@@ -26,14 +28,15 @@ function MemberPicker({
   selected: Set<string>
   onToggle: (agent: Agent) => void
 }): React.JSX.Element {
+  const tr = useT()
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
         <label className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          邀请群成员
+          {tr('conv.newProjectModal.invite')}
         </label>
         <span className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
-          已选 {selected.size}/{agents.length}（全选 = 全员，新 Agent 自动入群）
+          {tr('conv.newProjectModal.selected', { sel: selected.size, total: agents.length })}
         </span>
       </div>
       <div
@@ -89,6 +92,7 @@ function MemberPicker({
 }
 
 export function NewProjectModal({ open, onClose }: Props): React.JSX.Element | null {
+  const tr = useT()
   const agents = useAppStore((s) => s.agents)
   const enabledAgents = useMemo(() => agents.filter((a) => a.enabled), [agents])
 
@@ -137,7 +141,7 @@ export function NewProjectModal({ open, onClose }: Props): React.JSX.Element | n
       setFolderPath(path)
       setStep('folder-form')
     } catch {
-      setError('选择目录失败')
+      setError(tr('conv.newProjectModal.pickDirError'))
     }
   }
 
@@ -151,226 +155,180 @@ export function NewProjectModal({ open, onClose }: Props): React.JSX.Element | n
       close()
     } catch {
       setLoading(false)
-      setError('创建项目失败，请确认后端服务已启动')
+      setError(tr('conv.newProjectModal.createError'))
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Escape') close()
-  }
-
   const titleMap: Record<Step, string> = {
-    choose: '新建项目',
-    'blank-form': '新建空白项目',
-    'folder-form': '打开项目文件夹'
+    choose: tr('conv.newProjectModal.titleChoose'),
+    'blank-form': tr('conv.newProjectModal.titleBlank'),
+    'folder-form': tr('conv.newProjectModal.titleFolder')
   }
 
   return (
-    <div
-      className="fixed inset-0 flex items-center justify-center"
-      style={{ zIndex: 100, background: 'rgba(0,0,0,0.4)' }}
-      role="dialog"
-      aria-modal="true"
-      onKeyDown={handleKeyDown}
+    <Modal
+      title={titleMap[step]}
+      onClose={close}
+      onBack={step !== 'choose' ? () => setStep('choose') : undefined}
+      closeOnOverlay={false}
     >
-      <div
-        className="w-[440px] rounded-xl overflow-hidden"
-        style={{ boxShadow: 'var(--shadow-float)', background: 'var(--color-bg-container)' }}
-      >
-        {/* header */}
+      {error && (
         <div
-          className="flex items-center gap-3 px-5 py-4"
-          style={{ borderBottom: '1px solid var(--color-border-light)' }}
+          className="px-3 py-2 rounded-lg text-xs"
+          style={{ background: 'var(--color-error-bg)', color: 'var(--color-error)' }}
         >
-          {step !== 'choose' && (
-            <button
-              onClick={() => setStep('choose')}
-              className="btn-ghost flex items-center justify-center w-7 h-7 rounded-md"
-              style={{ color: 'var(--color-text-secondary)' }}
-            >
-              <ArrowLeft size={16} />
-            </button>
-          )}
-          <span
-            className="flex-1 text-sm font-semibold"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {titleMap[step]}
-          </span>
+          {error}
+        </div>
+      )}
+
+      {step === 'choose' && (
+        <div className="flex flex-col gap-3">
           <button
-            onClick={close}
-            className="btn-ghost flex items-center justify-center w-7 h-7 rounded-md"
-            style={{ color: 'var(--color-text-tertiary)' }}
+            onClick={handlePickFolder}
+            disabled={loading}
+            className="flex items-center gap-3 px-4 py-3.5 rounded-lg cursor-pointer transition-all duration-150"
+            style={{
+              background: 'var(--color-bg-spotlight)',
+              border: '1px solid var(--color-border-light)',
+              color: 'var(--color-text-primary)',
+              opacity: loading ? 0.6 : 1
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-brand)'
+              e.currentTarget.style.background = 'var(--color-brand-bg)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-border-light)'
+              e.currentTarget.style.background = 'var(--color-bg-spotlight)'
+            }}
           >
-            <X size={16} />
+            <div
+              className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
+              style={{ background: 'var(--color-brand-bg)' }}
+            >
+              <FolderOpen size={20} style={{ color: 'var(--color-brand)' }} />
+            </div>
+            <div className="text-left">
+              <div className="text-sm font-medium">{tr('conv.newProjectModal.useExisting')}</div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                {tr('conv.newProjectModal.useExistingDesc')}
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setStep('blank-form')}
+            disabled={loading}
+            className="flex items-center gap-3 px-4 py-3.5 rounded-lg cursor-pointer transition-all duration-150"
+            style={{
+              background: 'var(--color-bg-spotlight)',
+              border: '1px solid var(--color-border-light)',
+              color: 'var(--color-text-primary)',
+              opacity: loading ? 0.6 : 1
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-brand)'
+              e.currentTarget.style.background = 'var(--color-brand-bg)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-border-light)'
+              e.currentTarget.style.background = 'var(--color-bg-spotlight)'
+            }}
+          >
+            <div
+              className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
+              style={{ background: 'var(--color-brand-bg)' }}
+            >
+              <FilePlus size={20} style={{ color: 'var(--color-brand)' }} />
+            </div>
+            <div className="text-left">
+              <div className="text-sm font-medium">{tr('conv.newProjectModal.blank')}</div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
+                {tr('conv.newProjectModal.blankDesc')}
+              </div>
+            </div>
           </button>
         </div>
+      )}
 
-        {/* body */}
-        <div className="px-5 py-4">
-          {error && (
-            <div
-              className="mb-3 px-3 py-2 rounded-lg text-xs"
-              style={{ background: 'var(--color-error-bg)', color: 'var(--color-error)' }}
-            >
-              {error}
-            </div>
-          )}
-
-          {step === 'choose' && (
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={handlePickFolder}
-                disabled={loading}
-                className="flex items-center gap-3 px-4 py-3.5 rounded-lg cursor-pointer transition-all duration-150"
-                style={{
-                  background: 'var(--color-bg-spotlight)',
-                  border: '1px solid var(--color-border-light)',
-                  color: 'var(--color-text-primary)',
-                  opacity: loading ? 0.6 : 1
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-brand)'
-                  e.currentTarget.style.background = 'var(--color-brand-bg)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border-light)'
-                  e.currentTarget.style.background = 'var(--color-bg-spotlight)'
-                }}
-              >
-                <div
-                  className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
-                  style={{ background: 'var(--color-brand-bg)' }}
-                >
-                  <FolderOpen size={20} style={{ color: 'var(--color-brand)' }} />
-                </div>
-                <div className="text-left">
-                  <div className="text-sm font-medium">使用现有文件夹</div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
-                    选择本地已有的项目目录
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setStep('blank-form')}
-                disabled={loading}
-                className="flex items-center gap-3 px-4 py-3.5 rounded-lg cursor-pointer transition-all duration-150"
-                style={{
-                  background: 'var(--color-bg-spotlight)',
-                  border: '1px solid var(--color-border-light)',
-                  color: 'var(--color-text-primary)',
-                  opacity: loading ? 0.6 : 1
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-brand)'
-                  e.currentTarget.style.background = 'var(--color-brand-bg)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border-light)'
-                  e.currentTarget.style.background = 'var(--color-bg-spotlight)'
-                }}
-              >
-                <div
-                  className="flex items-center justify-center w-10 h-10 rounded-lg shrink-0"
-                  style={{ background: 'var(--color-brand-bg)' }}
-                >
-                  <FilePlus size={20} style={{ color: 'var(--color-brand)' }} />
-                </div>
-                <div className="text-left">
-                  <div className="text-sm font-medium">新建空白项目</div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-secondary)' }}>
-                    从零开始创建一个新项目
-                  </div>
-                </div>
-              </button>
-            </div>
-          )}
-
-          {step === 'folder-form' && (
-            <div className="flex flex-col gap-4">
+      {step === 'folder-form' && (
+        <div className="flex flex-col gap-4">
+          <div
+            className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg"
+            style={{
+              background: 'var(--color-bg-spotlight)',
+              border: '1px solid var(--color-border-light)'
+            }}
+          >
+            <FolderOpen size={16} className="shrink-0" style={{ color: 'var(--color-brand)' }} />
+            <div className="flex-1 min-w-0">
               <div
-                className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg"
-                style={{
-                  background: 'var(--color-bg-spotlight)',
-                  border: '1px solid var(--color-border-light)'
-                }}
+                className="text-xs font-medium truncate"
+                style={{ color: 'var(--color-text-primary)' }}
               >
-                <FolderOpen
-                  size={16}
-                  className="shrink-0"
-                  style={{ color: 'var(--color-brand)' }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div
-                    className="text-xs font-medium truncate"
-                    style={{ color: 'var(--color-text-primary)' }}
-                  >
-                    {basename(folderPath)}
-                  </div>
-                  <div
-                    className="text-[11px] truncate"
-                    style={{ color: 'var(--color-text-tertiary)' }}
-                    title={folderPath}
-                  >
-                    {folderPath}
-                  </div>
-                </div>
+                {basename(folderPath)}
               </div>
-
-              <MemberPicker agents={enabledAgents} selected={selected} onToggle={toggleMember} />
-
-              <button
-                onClick={() => handleCreate(basename(folderPath), folderPath)}
-                disabled={loading}
-                className="btn-brand flex items-center justify-center gap-1.5 h-9 rounded-lg text-sm font-medium w-full"
-                style={{ opacity: loading ? 0.5 : 1 }}
+              <div
+                className="text-[11px] truncate"
+                style={{ color: 'var(--color-text-tertiary)' }}
+                title={folderPath}
               >
-                创建项目
-              </button>
-            </div>
-          )}
-
-          {step === 'blank-form' && (
-            <div className="flex flex-col gap-4">
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: 'var(--color-text-secondary)' }}
-                >
-                  项目名称
-                </label>
-                <input
-                  type="text"
-                  value={blankName}
-                  onChange={(e) => setBlankName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && blankName.trim()) handleCreate(blankName.trim())
-                  }}
-                  placeholder="输入项目名称"
-                  autoFocus
-                  className="w-full px-3 py-2 text-sm rounded-lg outline-none border transition-all duration-150 bg-[var(--color-bg-spotlight)] focus:bg-[var(--color-bg-container)] focus:border-[var(--color-brand)] focus:shadow-[0_0_0_3px_var(--color-brand-bg)]"
-                  style={{
-                    color: 'var(--color-text-primary)',
-                    borderColor: 'var(--color-border-light)'
-                  }}
-                />
+                {folderPath}
               </div>
-
-              <MemberPicker agents={enabledAgents} selected={selected} onToggle={toggleMember} />
-
-              <button
-                onClick={() => handleCreate(blankName.trim())}
-                disabled={!blankName.trim() || loading}
-                className="btn-brand flex items-center justify-center gap-1.5 h-9 rounded-lg text-sm font-medium w-full"
-                style={{ opacity: !blankName.trim() || loading ? 0.5 : 1 }}
-              >
-                创建项目
-              </button>
             </div>
-          )}
+          </div>
+
+          <MemberPicker agents={enabledAgents} selected={selected} onToggle={toggleMember} />
+
+          <button
+            onClick={() => handleCreate(basename(folderPath), folderPath)}
+            disabled={loading}
+            className="btn-brand flex items-center justify-center gap-1.5 h-9 rounded-lg text-sm font-medium w-full"
+            style={{ opacity: loading ? 0.5 : 1 }}
+          >
+            {tr('conv.newProjectModal.create')}
+          </button>
         </div>
-      </div>
-    </div>
+      )}
+
+      {step === 'blank-form' && (
+        <div className="flex flex-col gap-4">
+          <div>
+            <label
+              className="block text-xs font-medium mb-1.5"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              {tr('conv.newProjectModal.projectName')}
+            </label>
+            <input
+              type="text"
+              value={blankName}
+              onChange={(e) => setBlankName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && blankName.trim()) handleCreate(blankName.trim())
+              }}
+              placeholder={tr('conv.newProjectModal.projectNamePlaceholder')}
+              autoFocus
+              className="w-full px-3 py-2 text-sm rounded-lg outline-none border transition-all duration-150 bg-[var(--color-bg-spotlight)] focus:bg-[var(--color-bg-container)] focus:border-[var(--color-brand)] focus:shadow-[0_0_0_3px_var(--color-brand-bg)]"
+              style={{
+                color: 'var(--color-text-primary)',
+                borderColor: 'var(--color-border-light)'
+              }}
+            />
+          </div>
+
+          <MemberPicker agents={enabledAgents} selected={selected} onToggle={toggleMember} />
+
+          <button
+            onClick={() => handleCreate(blankName.trim())}
+            disabled={!blankName.trim() || loading}
+            className="btn-brand flex items-center justify-center gap-1.5 h-9 rounded-lg text-sm font-medium w-full"
+            style={{ opacity: !blankName.trim() || loading ? 0.5 : 1 }}
+          >
+            {tr('conv.newProjectModal.create')}
+          </button>
+        </div>
+      )}
+    </Modal>
   )
 }

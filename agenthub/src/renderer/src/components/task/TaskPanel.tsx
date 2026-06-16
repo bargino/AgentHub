@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import { X, RotateCcw, Loader2, Check } from 'lucide-react'
+import { RotateCcw, Loader2, Check, CornerDownRight, ChevronRight, Clock } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { retryTask } from '../../services/api'
 import type { Task, TaskStatus } from '../../types'
 import { Avatar } from '../ui/Avatar'
 import { getRoleColor, getRoleLabel } from '../ui/role'
 import { Badge } from '../ui/Badge'
-import { ResizeHandle } from '../ui/ResizeHandle'
+import { useT } from '../../i18n'
 
 function RetryButton({ taskId }: { taskId: string }): React.JSX.Element {
+  const tr = useT()
   const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState(false)
 
@@ -45,7 +46,7 @@ function RetryButton({ taskId }: { taskId: string }): React.JSX.Element {
       onMouseLeave={(e) => {
         e.currentTarget.style.background = 'transparent'
       }}
-      title={error ? '重试失败，请稍后再试' : '重试'}
+      title={error ? tr('task.retryFailed') : tr('task.retry')}
     >
       {retrying ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
     </button>
@@ -55,32 +56,43 @@ function RetryButton({ taskId }: { taskId: string }): React.JSX.Element {
 const STATUS_BADGE: Record<
   TaskStatus,
   {
-    label: string
+    labelKey: string
     variant: 'default' | 'brand' | 'success' | 'warning' | 'error' | 'ghost'
   }
 > = {
-  pending: { label: '等待', variant: 'ghost' },
-  running: { label: '运行中', variant: 'brand' },
-  waiting_approval: { label: '待审批', variant: 'warning' },
-  success: { label: '完成', variant: 'success' },
-  failed: { label: '失败', variant: 'error' },
-  cancelled: { label: '已取消', variant: 'ghost' }
+  pending: { labelKey: 'task.status.pending', variant: 'ghost' },
+  running: { labelKey: 'task.status.running', variant: 'brand' },
+  waiting_approval: { labelKey: 'task.status.waitingApproval', variant: 'warning' },
+  success: { labelKey: 'task.status.success', variant: 'success' },
+  failed: { labelKey: 'task.status.failed', variant: 'error' },
+  cancelled: { labelKey: 'task.status.cancelled', variant: 'ghost' }
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  } catch {
-    return ''
-  }
+function formatTime(value: string): string {
+  // 后端 fmt_time 已返回 "HH:MM" 字符串，直接透传；
+  // 仅当传入的是可解析的完整时间戳时才格式化（兜底），避免对 "15:42" 再 new Date 解析得到 NaN:NaN
+  if (/^\d{1,2}:\d{2}$/.test(value)) return value
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function TaskItem({ task, isLast }: { task: Task; isLast: boolean }): React.JSX.Element {
+function TaskItem({
+  task,
+  isLast,
+  depLabels
+}: {
+  task: Task
+  isLast: boolean
+  depLabels: string[]
+}): React.JSX.Element {
+  const tr = useT()
   const cfg = STATUS_BADGE[task.status]
   const roleColor = getRoleColor(task.agentRole)
   const failed = task.status === 'failed'
   const done = task.status === 'success'
+  const [expanded, setExpanded] = useState(false)
+  const hasDetail = Boolean(task.result)
 
   return (
     <div
@@ -136,6 +148,21 @@ function TaskItem({ task, isLast }: { task: Task; isLast: boolean }): React.JSX.
             <Loader2 size={10} className="animate-spin" style={{ color: 'var(--color-brand)' }} />
           </span>
         )}
+        {task.status === 'waiting_approval' && (
+          <span
+            className="absolute flex items-center justify-center rounded-full"
+            style={{
+              right: -2,
+              bottom: -2,
+              width: 14,
+              height: 14,
+              background: 'var(--color-warning)',
+              boxShadow: '0 0 0 2px var(--color-bg-container)'
+            }}
+          >
+            <Clock size={9} color="#fff" strokeWidth={2.5} />
+          </span>
+        )}
         {done && (
           <span
             className="absolute flex items-center justify-center rounded-full animate-spring-pop"
@@ -162,7 +189,7 @@ function TaskItem({ task, isLast }: { task: Task; isLast: boolean }): React.JSX.
           >
             {task.title}
           </span>
-          <Badge variant={cfg.variant}>{cfg.label}</Badge>
+          <Badge variant={cfg.variant}>{tr(cfg.labelKey)}</Badge>
         </div>
 
         <div className="flex items-center gap-2" style={{ marginTop: 4 }}>
@@ -174,7 +201,52 @@ function TaskItem({ task, isLast }: { task: Task; isLast: boolean }): React.JSX.
               {formatTime(task.startedAt)}
             </span>
           )}
+          {hasDetail && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-0.5 text-xs"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            >
+              <ChevronRight
+                size={12}
+                style={{
+                  transform: expanded ? 'rotate(90deg)' : 'none',
+                  transition: 'transform var(--transition-normal)'
+                }}
+              />
+              {tr('task.detail')}
+            </button>
+          )}
         </div>
+
+        {/* 依赖关系：DAG 上游节点（depends_on 已在后端回填为真实任务标题） */}
+        {depLabels.length > 0 && (
+          <div
+            className="flex items-start gap-1 text-xs"
+            style={{ marginTop: 4, color: 'var(--color-text-tertiary)' }}
+            title={`${tr('task.dependsOn')}: ${depLabels.join(', ')}`}
+          >
+            <CornerDownRight size={12} className="shrink-0" style={{ marginTop: 2 }} />
+            <span className="truncate">{depLabels.join(', ')}</span>
+          </div>
+        )}
+
+        {/* 任务详情：执行结果 / 失败原因（展开） */}
+        {hasDetail && expanded && (
+          <pre
+            className="text-xs whitespace-pre-wrap break-words rounded-md"
+            style={{
+              marginTop: 6,
+              padding: '8px 10px',
+              background: 'var(--color-bg-spotlight)',
+              border: '1px solid var(--color-border-light)',
+              color: failed ? 'var(--color-error)' : 'var(--color-text-secondary)',
+              fontFamily: 'var(--font-mono)'
+            }}
+          >
+            {task.result}
+          </pre>
+        )}
       </div>
 
       {/* 重试（失败任务常显） */}
@@ -183,48 +255,36 @@ function TaskItem({ task, isLast }: { task: Task; isLast: boolean }): React.JSX.
   )
 }
 
-export function TaskPanel(): React.JSX.Element | null {
-  const open = useAppStore((s) => s.taskPanelOpen)
+export function TaskPanel(): React.JSX.Element {
+  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
   const tasksMap = useAppStore((s) => s.tasks)
-  const toggle = (): void => useAppStore.getState().toggleTaskPanel()
   const tasks = (activeId ? tasksMap[activeId] : undefined) ?? []
-
-  if (!open) return null
 
   const done = tasks.filter((t) => t.status === 'success').length
   const pct = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0
 
+  // 依赖 id -> 标题（depends_on 已由后端回填为真实任务 id），供 DAG 关系展示
+  const titleById = new Map(tasks.map((t) => [t.id, t.title]))
+  const depLabelsOf = (t: Task): string[] =>
+    (t.dependsOn ?? []).map((id) => titleById.get(id)).filter((x): x is string => Boolean(x))
+
   return (
     <div
-      className="relative flex flex-col shrink-0 panel-slide-right"
-      style={{
-        width: 'var(--right-panel-width)',
-        background: 'var(--color-bg-container)',
-        borderLeft: '1px solid var(--color-border)'
-      }}
+      className="flex flex-col h-full min-h-0"
+      style={{ background: 'var(--color-bg-container)' }}
     >
-      <ResizeHandle />
-      {/* header */}
+      {/* 进度概览：任务数 + 完成数 */}
       <div
-        className="flex items-center justify-between shrink-0"
-        style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border)' }}
+        className="flex items-center gap-2 shrink-0"
+        style={{ padding: '10px 16px', borderBottom: '1px solid var(--color-border-light)' }}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            任务进度
-          </span>
-          <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-secondary)' }}>
-            {done}/{tasks.length}
-          </span>
-        </div>
-        <button
-          onClick={toggle}
-          className="flex items-center justify-center rounded-md hover-spotlight"
-          style={{ width: 28, height: 28 }}
-        >
-          <X size={16} style={{ color: 'var(--color-text-secondary)' }} />
-        </button>
+        <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+          {tr('task.title')}
+        </span>
+        <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
+          {done}/{tasks.length}
+        </span>
       </div>
 
       {/* 分段进度条：按任务数分段，完成段渐变填充 + 右侧百分比 */}
@@ -265,10 +325,17 @@ export function TaskPanel(): React.JSX.Element | null {
             className="flex items-center justify-center text-sm"
             style={{ color: 'var(--color-text-secondary)', paddingTop: 48, paddingBottom: 48 }}
           >
-            暂无任务
+            {tr('task.empty')}
           </div>
         ) : (
-          tasks.map((t, i) => <TaskItem key={t.id} task={t} isLast={i === tasks.length - 1} />)
+          tasks.map((t, i) => (
+            <TaskItem
+              key={t.id}
+              task={t}
+              isLast={i === tasks.length - 1}
+              depLabels={depLabelsOf(t)}
+            />
+          ))
         )}
       </div>
     </div>

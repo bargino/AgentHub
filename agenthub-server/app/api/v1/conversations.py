@@ -65,6 +65,21 @@ async def update_conversation(
     return conv
 
 
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """永久删除会话：级联清理消息/任务/事件/diff/审批/workspace；运行中先停止。
+
+    与归档不同（归档软隐藏、保留数据、可恢复），删除不可恢复。
+    """
+    run_registry.cancel(conversation_id)
+    deleted = await conversation_service.delete_conversation(db, conversation_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"deleted": True}
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageOut])
 async def list_messages(
     conversation_id: str,

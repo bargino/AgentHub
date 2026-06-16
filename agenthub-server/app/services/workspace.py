@@ -163,6 +163,20 @@ async def generate_diff(workspace_path: str) -> list[dict]:
     return files
 
 
+async def stage_changes(workspace_path: str) -> bool:
+    """把工作区改动 git add 暂存（不提交），让 git 面板把已审批落盘的变更显示为 staged。
+
+    审批闸门为「应用前」，agent 在放行后才写盘，故在写型任务收尾时统一暂存：此刻被拒绝的
+    改动从未落盘、被通过的改动已落盘，git add -A 恰好暂存「已通过」的变更。"""
+    ws = Path(workspace_path)
+    if not ws.is_dir():
+        return False
+    code, _, err = await _run_git(["add", "-A"], ws)
+    if code != 0:
+        logger.warning("Stage failed: %s", err.strip())
+    return code == 0
+
+
 async def commit_changes(workspace_path: str, message: str) -> bool:
     """审批通过后提交变更（推进基线）。"""
     ws = Path(workspace_path)

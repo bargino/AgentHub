@@ -1,20 +1,30 @@
 import { useMemo, useState } from 'react'
-import { X, Plus, Lock, Archive, Check, Loader2, Users } from 'lucide-react'
+import {
+  X,
+  Plus,
+  Lock,
+  Archive,
+  Check,
+  Loader2,
+  Users,
+  Server,
+  Sparkles,
+  ScrollText
+} from 'lucide-react'
 import { useAppStore, resolveMembers } from '../../store'
+import { useT } from '../../i18n'
 import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
-import { ResizeHandle } from '../ui/ResizeHandle'
+import { ResourcePicker } from '../manage/ResourcePicker'
+import { GroupResourceModal } from '../manage/GroupResourceModal'
+import { useMcpServers, useSkills, useRules, type Selection } from '../manage/mgmtData'
 import type { Agent, Conversation } from '../../types'
 
-/** settings.skills 四态：跟随全局（缺省）/ 全部加载 / 自定义列表 / 关闭 */
-type SkillMode = 'inherit' | 'all' | 'custom' | 'off'
-
-function readSkillMode(settings: Record<string, unknown>): { mode: SkillMode; list: string } {
-  const v = settings['skills']
-  if (v === 'all') return { mode: 'all', list: '' }
-  if (v === 'off') return { mode: 'off', list: '' }
-  if (Array.isArray(v)) return { mode: 'custom', list: v.join(', ') }
-  return { mode: 'inherit', list: '' }
+/** 群聊资源选择：'all'（缺省/全选）/ 'off'（旧值，全不选）/ id 列表 */
+function readSelection(v: unknown): Selection {
+  if (v === 'off') return []
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string')
+  return 'all'
 }
 
 /** settings.collab_intensity 协作强度：精简 / 标准 / 严格 */
@@ -43,6 +53,7 @@ function MemberCell({
   removable: boolean
   onRemove: () => void
 }): React.JSX.Element {
+  const tr = useT()
   return (
     <div className="relative flex flex-col items-center gap-1 w-[52px] group">
       <div className="relative">
@@ -50,7 +61,7 @@ function MemberCell({
         {removable ? (
           <button
             onClick={onRemove}
-            title={`移除 ${agent.name}`}
+            title={tr('conv.group.remove', { name: agent.name })}
             className="absolute -top-1 -right-1 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full cursor-pointer border-none"
             style={{ background: 'var(--color-error)', color: '#fff' }}
           >
@@ -64,7 +75,7 @@ function MemberCell({
               boxShadow: '0 0 0 1px var(--color-border-light)',
               color: 'var(--color-text-tertiary)'
             }}
-            title="群主（不可移除）"
+            title={tr('conv.group.owner')}
           >
             <Lock size={9} />
           </span>
@@ -91,6 +102,7 @@ function InviteList({
   onInvite: (agent: Agent) => void
   onClose: () => void
 }): React.JSX.Element {
+  const tr = useT()
   return (
     <div
       className="absolute left-0 right-0 top-full mt-1.5 rounded-lg overflow-hidden animate-fade-in"
@@ -105,7 +117,7 @@ function InviteList({
         style={{ borderBottom: '1px solid var(--color-border-light)' }}
       >
         <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          邀请 Agent 入群
+          {tr('conv.group.inviteHeading')}
         </span>
         <button
           onClick={onClose}
@@ -121,7 +133,7 @@ function InviteList({
             className="px-3 py-4 text-center text-xs"
             style={{ color: 'var(--color-text-tertiary)' }}
           >
-            所有已启用的 Agent 均已在群中
+            {tr('conv.group.inviteEmpty')}
           </div>
         ) : (
           candidates.map((a) => (
@@ -155,18 +167,32 @@ function InviteList({
   )
 }
 
-const SKILL_OPTIONS: { value: SkillMode; label: string; desc: string }[] = [
-  { value: 'inherit', label: '跟随全局', desc: '使用全局技能配置' },
-  { value: 'all', label: '全部加载', desc: '加载全部可用技能' },
-  { value: 'custom', label: '自定义列表', desc: '仅加载指定技能' },
-  { value: 'off', label: '关闭', desc: '本群不加载技能' }
+const INTENSITY_OPTIONS: { value: IntensityMode; labelKey: string; descKey: string }[] = [
+  {
+    value: 'lite',
+    labelKey: 'conv.group.intensity_lite',
+    descKey: 'conv.group.intensity_liteDesc'
+  },
+  {
+    value: 'standard',
+    labelKey: 'conv.group.intensity_standard',
+    descKey: 'conv.group.intensity_standardDesc'
+  },
+  {
+    value: 'strict',
+    labelKey: 'conv.group.intensity_strict',
+    descKey: 'conv.group.intensity_strictDesc'
+  }
 ]
 
-const INTENSITY_OPTIONS: { value: IntensityMode; label: string; desc: string }[] = [
-  { value: 'lite', label: '精简', desc: '尽量直接回答或单步完成，少拆任务' },
-  { value: 'standard', label: '标准', desc: '由编排器按需判断协作深度' },
-  { value: 'strict', label: '严格', desc: '复杂任务自动加审查收尾' }
-]
+const MCP_KIND_KEY: Record<string, string> = {
+  local: 'conv.group.mcpKind.local',
+  remote: 'conv.group.mcpKind.remote'
+}
+const RULE_KIND_KEY: Record<string, string> = {
+  instruction: 'conv.group.ruleKind.instruction',
+  permission: 'conv.group.ruleKind.permission'
+}
 
 export function GroupSettingsPanel(): React.JSX.Element | null {
   const open = useAppStore((s) => s.groupPanelOpen)
@@ -176,21 +202,28 @@ export function GroupSettingsPanel(): React.JSX.Element | null {
   const conv = conversations.find((c) => c.id === activeId)
   if (!open || !conv) return null
 
-  // key 随会话切换重置：切换会话时本地编辑态（规则/技能草稿）随之重置
+  // key 随会话切换重置：切换会话时本地编辑态随之重置
   return <PanelBody key={conv.id} conv={conv} />
 }
 
 function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
+  const tr = useT()
   const agents = useAppStore((s) => s.agents)
   const members = useMemo(() => resolveMembers(conv, agents), [conv, agents])
   const isAllMembers = (conv.memberAgentIds ?? []).length === 0
 
-  const initialSkill = readSkillMode(conv.settings ?? {})
+  const mcpServers = useMcpServers()
+  const skills = useSkills()
+  const rulesLib = useRules()
+
+  const settings = conv.settings ?? {}
   const [showInvite, setShowInvite] = useState(false)
   const [rules, setRules] = useState(conv.rules ?? '')
-  const [skillMode, setSkillMode] = useState<SkillMode>(initialSkill.mode)
-  const [skillList, setSkillList] = useState(initialSkill.list)
-  const [intensity, setIntensity] = useState<IntensityMode>(readIntensity(conv.settings ?? {}))
+  const [mcpSel, setMcpSel] = useState<Selection>(readSelection(settings['mcp']))
+  const [skillSel, setSkillSel] = useState<Selection>(readSelection(settings['skills']))
+  const [ruleSel, setRuleSel] = useState<Selection>(readSelection(settings['rules']))
+  const [intensity, setIntensity] = useState<IntensityMode>(readIntensity(settings))
+  const [modalTab, setModalTab] = useState<'mcp' | 'skills' | 'rules' | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [confirmArchive, setConfirmArchive] = useState(false)
@@ -200,6 +233,32 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
   const memberIdSet = new Set(members.map((m) => m.id))
   const candidates = enabledAgents.filter((a) => !memberIdSet.has(a.id))
 
+  const mcpRows = mcpServers.map((m) => ({
+    id: m.id,
+    name: m.name || tr('conv.group.unnamedMcp'),
+    sub:
+      (MCP_KIND_KEY[m.kind] ? tr(MCP_KIND_KEY[m.kind]) : m.kind) +
+      (m.description ? ` · ${m.description}` : ''),
+    accent: 'var(--color-brand)'
+  }))
+  const skillRows = skills.map((s) => ({
+    id: s.id,
+    name: s.name || tr('conv.group.unnamedSkill'),
+    sub: s.category || s.description || undefined,
+    accent: 'var(--color-success)'
+  }))
+  const ruleRows = rulesLib.map((r) => ({
+    id: r.id,
+    name: r.name || tr('conv.group.unnamedRule'),
+    sub: `${RULE_KIND_KEY[r.kind] ? tr(RULE_KIND_KEY[r.kind]) : r.kind}${r.description ? ` · ${r.description}` : ''}`,
+    accent: 'var(--color-warning)'
+  }))
+
+  const goManage = (): void => {
+    useAppStore.getState().setActivePage('manage')
+    useAppStore.getState().toggleGroupPanel()
+  }
+
   const patch = async (
     data: Parameters<ReturnType<typeof useAppStore.getState>['updateConversation']>[1]
   ): Promise<boolean> => {
@@ -208,7 +267,7 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
       await useAppStore.getState().updateConversation(conv.id, data)
       return true
     } catch {
-      setError('保存失败，请确认 AgentHub Server 已启动')
+      setError(tr('conv.group.saveError'))
       return false
     }
   }
@@ -231,18 +290,13 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
   const handleSave = async (): Promise<void> => {
     setSaving(true)
     setSaved(false)
-    const settings: Record<string, unknown> = { ...(conv.settings ?? {}) }
-    if (skillMode === 'inherit') delete settings['skills']
-    else if (skillMode === 'custom')
-      settings['skills'] = skillList
-        .split(/[,，]/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-    else settings['skills'] = skillMode
-    // 协作强度：标准为默认，不落库（缺省即标准）
-    if (intensity === 'standard') delete settings['collab_intensity']
-    else settings['collab_intensity'] = intensity
-    const ok = await patch({ rules, settings })
+    const next: Record<string, unknown> = { ...settings }
+    next['mcp'] = mcpSel
+    next['skills'] = skillSel
+    next['rules'] = ruleSel
+    if (intensity === 'standard') delete next['collab_intensity']
+    else next['collab_intensity'] = intensity
+    const ok = await patch({ rules, settings: next })
     setSaving(false)
     if (ok) {
       setSaved(true)
@@ -268,7 +322,6 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
         borderLeft: '1px solid var(--color-border)'
       }}
     >
-      <ResizeHandle />
       {/* header */}
       <div
         className="flex items-center justify-between shrink-0 px-4 py-3"
@@ -277,7 +330,7 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
         <div className="flex items-center gap-2">
           <Users size={15} style={{ color: 'var(--color-text-secondary)' }} />
           <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            群设置
+            {tr('conv.group.title')}
           </span>
         </div>
         <button
@@ -301,10 +354,10 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
         {/* 群成员 */}
         <div className="relative">
           <div className="flex items-center justify-between mb-2">
-            <SectionTitle>群成员（{members.length}）</SectionTitle>
+            <SectionTitle>{tr('conv.group.members', { count: members.length })}</SectionTitle>
             {isAllMembers && (
               <Badge variant="brand" size="sm">
-                全员
+                {tr('conv.group.allMembers')}
               </Badge>
             )}
           </div>
@@ -317,11 +370,10 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
                 onRemove={() => handleRemove(m)}
               />
             ))}
-            {/* 邀请按钮 */}
             <div className="flex flex-col items-center gap-1 w-[52px]">
               <button
                 onClick={() => setShowInvite((v) => !v)}
-                title="邀请 Agent"
+                title={tr('conv.group.inviteAgent')}
                 className="flex items-center justify-center w-9 h-9 rounded-full cursor-pointer transition-colors duration-150"
                 style={{
                   background: 'transparent',
@@ -332,7 +384,7 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
                 <Plus size={16} />
               </button>
               <span className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                邀请
+                {tr('conv.group.invite')}
               </span>
             </div>
           </div>
@@ -345,14 +397,46 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
           )}
         </div>
 
-        {/* 群规则 */}
+        {/* 可用资源（从管理中心仓库勾选；不配置=全选） */}
+        <ResourcePicker
+          title={tr('conv.group.mcp')}
+          icon={Server}
+          items={mcpRows}
+          selection={mcpSel}
+          onChange={setMcpSel}
+          emptyHint={tr('conv.group.mcpEmpty')}
+          onManage={goManage}
+          onExpand={() => setModalTab('mcp')}
+        />
+        <ResourcePicker
+          title={tr('conv.group.skills')}
+          icon={Sparkles}
+          items={skillRows}
+          selection={skillSel}
+          onChange={setSkillSel}
+          emptyHint={tr('conv.group.skillsEmpty')}
+          onManage={goManage}
+          onExpand={() => setModalTab('skills')}
+        />
+        <ResourcePicker
+          title={tr('conv.group.rules')}
+          icon={ScrollText}
+          items={ruleRows}
+          selection={ruleSel}
+          onChange={setRuleSel}
+          emptyHint={tr('conv.group.rulesEmpty')}
+          onManage={goManage}
+          onExpand={() => setModalTab('rules')}
+        />
+
+        {/* 附加自定义规则（可选自由文本） */}
         <div>
-          <SectionTitle>群规则</SectionTitle>
+          <SectionTitle>{tr('conv.group.extraRules')}</SectionTitle>
           <textarea
             value={rules}
             onChange={(e) => setRules(e.target.value)}
-            rows={4}
-            placeholder={'注入本会话所有任务指令，例如：\n本项目用 pnpm；禁止修改 CI 配置'}
+            rows={3}
+            placeholder={tr('conv.group.extraRulesPlaceholder')}
             className="styled-input w-full resize-none leading-relaxed"
             style={{ fontSize: 'var(--font-size-sm)' }}
           />
@@ -360,7 +444,7 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
 
         {/* 协作强度 */}
         <div>
-          <SectionTitle>协作强度</SectionTitle>
+          <SectionTitle>{tr('conv.group.intensity')}</SectionTitle>
           <div className="flex flex-col gap-1.5">
             {INTENSITY_OPTIONS.map((opt) => {
               const active = intensity === opt.value
@@ -393,72 +477,16 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
                       className="text-xs font-medium"
                       style={{ color: active ? 'var(--color-brand)' : 'var(--color-text-primary)' }}
                     >
-                      {opt.label}
+                      {tr(opt.labelKey)}
                     </div>
                     <div className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                      {opt.desc}
+                      {tr(opt.descKey)}
                     </div>
                   </div>
                 </button>
               )
             })}
           </div>
-        </div>
-
-        {/* 群技能 */}
-        <div>
-          <SectionTitle>群技能</SectionTitle>
-          <div className="flex flex-col gap-1.5">
-            {SKILL_OPTIONS.map((opt) => {
-              const active = skillMode === opt.value
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() => setSkillMode(opt.value)}
-                  className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer text-left transition-colors duration-150"
-                  style={{
-                    background: active ? 'var(--color-brand-bg)' : 'var(--color-bg-spotlight)',
-                    border: `1px solid ${active ? 'var(--color-brand)' : 'var(--color-border-light)'}`
-                  }}
-                >
-                  <span
-                    className="flex items-center justify-center w-4 h-4 rounded-full shrink-0"
-                    style={{
-                      border: `1.5px solid ${active ? 'var(--color-brand)' : 'var(--color-border)'}`,
-                      background: 'var(--color-bg-container)'
-                    }}
-                  >
-                    {active && (
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ background: 'var(--color-brand)' }}
-                      />
-                    )}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className="text-xs font-medium"
-                      style={{ color: active ? 'var(--color-brand)' : 'var(--color-text-primary)' }}
-                    >
-                      {opt.label}
-                    </div>
-                    <div className="text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
-                      {opt.desc}
-                    </div>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-          {skillMode === 'custom' && (
-            <input
-              type="text"
-              value={skillList}
-              onChange={(e) => setSkillList(e.target.value)}
-              placeholder="逗号分隔技能名，如 code-audit, ui-design"
-              className="styled-input w-full mt-2"
-            />
-          )}
         </div>
 
         {/* 保存 */}
@@ -473,7 +501,7 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
           ) : saved ? (
             <Check size={14} />
           ) : null}
-          {saved ? '已保存' : '保存群规则与技能'}
+          {saved ? tr('conv.group.saved') : tr('conv.group.save')}
         </button>
 
         {/* 危险区 */}
@@ -483,10 +511,24 @@ function PanelBody({ conv }: { conv: Conversation }): React.JSX.Element {
             className="btn-outline-error flex items-center justify-center gap-1.5 w-full h-9 rounded-lg text-sm font-medium"
           >
             <Archive size={14} />
-            {confirmArchive ? '再次点击确认归档' : '归档会话'}
+            {confirmArchive ? tr('conv.archiveConfirm') : tr('conv.archive')}
           </button>
         </div>
       </div>
+
+      {modalTab && (
+        <GroupResourceModal
+          conv={conv}
+          initialTab={modalTab}
+          initialSel={{ mcp: mcpSel, skills: skillSel, rules: ruleSel }}
+          onClose={() => setModalTab(null)}
+          onSaved={(sel) => {
+            setMcpSel(sel.mcp)
+            setSkillSel(sel.skills)
+            setRuleSel(sel.rules)
+          }}
+        />
+      )}
     </div>
   )
 }

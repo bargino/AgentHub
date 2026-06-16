@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import socket
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.core.event_bus import get_event_bus
 from app.schemas import WSEvent
@@ -21,12 +24,16 @@ MAX_PORT_SCAN = 50
 STARTUP_TIMEOUT = 60.0
 LOG_BUFFER_SIZE = 200
 
+# 可识别的 Python web 入口文件（按优先级）
+_PY_ENTRIES = ("app.py", "main.py", "wsgi.py", "server.py", "run.py")
+
 
 @dataclass
 class PreviewProcess:
     conversation_id: str
     port: int
     process: asyncio.subprocess.Process
+    project_type: str = "node"
     logs: deque[str] = field(default_factory=lambda: deque(maxlen=LOG_BUFFER_SIZE))
 
     @property
@@ -36,6 +43,46 @@ class PreviewProcess:
     @property
     def running(self) -> bool:
         return self.process.returncode is None
+
+
+def detect_command(workspace: Path, port: int) -> tuple[str, str]:
+    """识别项目类型并返回 (启动命令, project_type)。
+
+    支持：vite/Node(package.json 含 dev/start)、Django(manage.py)、Flask(含 Flask 的入口)、
+    纯静态(index.html)、通用 Python 入口(经 PORT 环境变量兜底)。识别失败 raise RuntimeError。
+    端口均通过命令行/环境变量显式指定，保证 _wait_ready 轮询的端口与实际监听一致。
+    """
+    pkg = workspace / "package.json"
+    if pkg.is_file():
+        try:
+            scripts = json.loads(pkg.read_text("utf-8", errors="replace")).get("scripts", {})
+        except (OSError, json.JSONDecodeError):
+            scripts = {}
+        if "dev" in scripts:
+            return f"npm run dev -- --port {port} --strictPort", "node"
+        if "start" in scripts:
+            return f"npm start -- --port {port}", "node"
+
+    if (workspace / "manage.py").is_file():
+        return f"python manage.py runserver 127.0.0.1:{port}", "django"
+
+    for entry in _PY_ENTRIES:
+        f = workspace / entry
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text("utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if "Flask" in text or "flask" in text:
+            return f"python -m flask --app {entry[:-3]} run --host 127.0.0.1 --port {port}", "flask"
+        # 通用 Python 入口：端口靠 PORT 环境变量兜底（许多框架支持）
+        return f"python {entry}", "python"
+
+    if (workspace / "index.html").is_file():
+        return f"python -m http.server {port} --bind 127.0.0.1", "static"
+
+    raise RuntimeError("无法识别项目类型：未找到 package.json(dev/start) / manage.py / app.py / index.html")
 
 
 class PreviewManager:
@@ -58,16 +105,20 @@ class PreviewManager:
             self._processes.pop(conversation_id, None)
 
         port = self._find_free_port()
-        # 白名单命令：npm run dev（端口通过 vite 约定参数传递）
-        command = f"npm run dev -- --port {port} --strictPort"
+        command, project_type = detect_command(Path(workspace_path), port)
 
+        # 端口环境变量兜底：通用 Python / 部分框架读取 PORT/FLASK_RUN_PORT
+        env = {**os.environ, "PORT": str(port), "FLASK_RUN_PORT": str(port)}
         proc = await asyncio.create_subprocess_shell(
             command,
             cwd=workspace_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=env,
         )
-        preview = PreviewProcess(conversation_id=conversation_id, port=port, process=proc)
+        preview = PreviewProcess(
+            conversation_id=conversation_id, port=port, process=proc, project_type=project_type
+        )
         self._processes[conversation_id] = preview
 
         asyncio.create_task(self._pump_logs(preview))
@@ -78,7 +129,7 @@ class PreviewManager:
                 WSEvent(
                     type="preview.started",
                     conversation_id=conversation_id,
-                    data={"previewUrl": preview.url, "port": port},
+                    data={"previewUrl": preview.url, "port": port, "projectType": project_type},
                 )
             )
             return preview

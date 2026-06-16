@@ -17,11 +17,12 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.adapters.attachments import save_image_attachment
 from app.api.ws.manager import get_connection_manager
 from app.core import run_registry
 from app.core.event_bus import get_event_bus
 from app.core.message_handler import get_message_handler
-from app.db.engine import get_session_factory
+from app.db.engine import get_data_dir, get_session_factory
 from app.schemas import WSEvent
 from app.services import message as message_service
 
@@ -125,14 +126,37 @@ async def handle_send_message(payload: dict[str, Any]) -> None:
     conversation_id = payload.get("conversationId")
     content = (payload.get("content") or "").strip()
     target_agent = payload.get("targetAgent")
-    if not conversation_id or not content:
+    raw_attachments = payload.get("attachments") or []
+    if not conversation_id or (not content and not raw_attachments):
         return
+
+    # 多模态：base64 附件落盘为统一 ref，存入用户消息 meta.attachments；
+    # 单个附件解码/落盘失败仅跳过 + 告警，不阻断整条消息
+    att_refs: list[dict[str, Any]] = []
+    for a in raw_attachments:
+        if not isinstance(a, dict):
+            continue
+        try:
+            att_refs.append(
+                save_image_attachment(
+                    get_data_dir(),
+                    conversation_id,
+                    data_url=str(a.get("url") or ""),
+                    filename=a.get("filename"),
+                )
+            )
+        except (ValueError, OSError):
+            logger.warning("附件已跳过（解码/落盘失败）", exc_info=True)
 
     # 1. 持久化用户消息（message_service 内部经 EventBus 广播 message.completed）
     async with get_session_factory()() as session:
         async with session.begin():
             await message_service.append_message(
-                session, conversation_id, type="user", content=content
+                session,
+                conversation_id,
+                type="user",
+                content=content,
+                meta={"attachments": att_refs} if att_refs else None,
             )
 
     # 2. 交给可插拔消息处理器；句柄注册到 run_registry 供 /stop 取消

@@ -6,8 +6,8 @@ import type { Message, AgentRole } from '../../types'
 import { useAppStore } from '../../store'
 import { Avatar } from '../ui/Avatar'
 import { getRoleColor, getRoleLabel } from '../ui/role'
+import { useT } from '../../i18n'
 import { ThinkingCard } from './ThinkingCard'
-import { ToolCallCard } from './ToolCallCard'
 import { CodeBlock } from './CodeBlock'
 
 /** agent / approval / error 气泡的 Markdown 正文（GFM + 代码块高亮） */
@@ -33,6 +33,7 @@ export function MarkdownBody({ content }: { content: string }): React.JSX.Elemen
 
 /** 浮动操作条：气泡右上 hover 浮出（复制 / 引用回复 / 用户消息回退） */
 function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
+  const tr = useT()
   const [copied, setCopied] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
 
@@ -66,7 +67,7 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
     >
       <button
         onClick={copy}
-        title={copied ? '已复制' : '复制'}
+        title={copied ? tr('common.copied') : tr('common.copy')}
         className="flex items-center justify-center w-5 h-5 rounded border-none bg-transparent cursor-pointer hover-spotlight"
         style={{ color: copied ? 'var(--color-success)' : 'var(--color-text-tertiary)' }}
       >
@@ -74,7 +75,7 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
       </button>
       <button
         onClick={() => useAppStore.getState().setReplyingTo(msg)}
-        title="引用回复"
+        title={tr('chat.bubble.quote')}
         className="flex items-center justify-center w-5 h-5 rounded border-none bg-transparent cursor-pointer hover-spotlight"
         style={{ color: 'var(--color-text-tertiary)' }}
       >
@@ -83,7 +84,7 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
       {canRollback && (
         <button
           onClick={rollback}
-          title={confirmRollback ? '再次点击确认：删除本条及之后的全部消息' : '回退到此处'}
+          title={confirmRollback ? tr('chat.bubble.rollbackConfirm') : tr('chat.bubble.rollback')}
           className="flex items-center justify-center h-5 rounded border-none bg-transparent cursor-pointer hover-spotlight"
           style={{
             minWidth: 20,
@@ -92,7 +93,9 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
           }}
         >
           <Undo2 size={12} />
-          {confirmRollback && <span className="text-[10px] ml-1">确认回退</span>}
+          {confirmRollback && (
+            <span className="text-[10px] ml-1">{tr('chat.bubble.rollbackConfirmShort')}</span>
+          )}
         </button>
       )}
     </div>
@@ -126,15 +129,7 @@ export function MessageBubble({
     return <ThinkingCard msg={msg} />
   }
 
-  // 工具调用：左侧 Avatar + ToolCallCard（连续多条由 ChatWindow 聚合为 ToolCallGroup）
-  if (msg.type === 'tool') {
-    return (
-      <div className="flex items-start gap-2.5 my-1.5 px-4 animate-fade-in">
-        <Avatar role={msg.agentRole ?? 'orchestrator'} size="sm" className="mt-0.5" />
-        <ToolCallCard msg={msg} />
-      </div>
-    )
-  }
+  // 工具消息一律由 ChatWindow 的 buildFeed 聚合为 ToolCallGroup 渲染，不会走到这里
 
   // 用户消息：右对齐渐变气泡（纯文本保留换行），hover 右上浮出操作条
   if (msg.type === 'user') {
@@ -156,6 +151,24 @@ export function MessageBubble({
               boxShadow: 'var(--shadow-sm)'
             }}
           >
+            {msg.attachments && msg.attachments.length > 0 && (
+              <div className={`flex flex-wrap gap-1.5 ${msg.content ? 'mb-2' : ''}`}>
+                {msg.attachments.map((a, i) => (
+                  <img
+                    key={i}
+                    src={a.url}
+                    alt={a.filename || 'image'}
+                    style={{
+                      maxWidth: 180,
+                      maxHeight: 180,
+                      borderRadius: 'var(--radius-md)',
+                      display: 'block',
+                      background: 'rgba(255,255,255,0.15)'
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             {msg.content}
           </div>
         </div>

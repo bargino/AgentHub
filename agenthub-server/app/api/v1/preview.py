@@ -24,7 +24,7 @@ async def start_preview(conversation_id: str, db: AsyncSession = Depends(get_db)
         preview = await get_preview_manager().start(conversation_id, ws.path)
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    return {"previewUrl": preview.url, "port": preview.port}
+    return {"previewUrl": preview.url, "port": preview.port, "projectType": preview.project_type}
 
 
 @router.post("/conversations/{conversation_id}/preview/stop")
@@ -40,5 +40,6 @@ async def preview_logs(conversation_id: str) -> dict:
     return {
         "running": bool(preview and preview.running),
         "previewUrl": preview.url if preview else None,
+        "projectType": preview.project_type if preview else None,
         "logs": manager.get_logs(conversation_id),
     }

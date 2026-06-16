@@ -1,4 +1,8 @@
-import { getServerBaseUrl } from './http'
+// 进程内桥客户端：对外保持与原 WebSocket 客户端完全一致的接口，
+// 内部改走主进程 stdio 桥（window.bridge），不再有 socket / 重连 / 心跳。
+// store、PreviewPanel、SettingsPage、App 等调用方无需改动。
+
+import { t } from '../i18n'
 
 export type WsStatus = 'connecting' | 'connected' | 'disconnected'
 
@@ -10,101 +14,89 @@ export interface WsServerFrame {
 
 type EventHandler = (frame: WsServerFrame) => void
 type StatusHandler = (status: WsStatus) => void
+type ErrorHandler = (reason: string) => void
 
-const WS_PATH = '/ws/session'
-const RECONNECT_BASE_MS = 1000
-const RECONNECT_MAX_MS = 30000
+/** sendMessage 结果：受理成功 / 桥未连接 / 后端非 2xx（带错误文案） */
+export type SendResult = { ok: true } | { ok: false; reason: string }
 
-function deriveWsUrl(): string {
-  const base = getServerBaseUrl().replace(/^http/, 'ws')
-  return `${base}${WS_PATH}`
+/** 多模态附件（与后端 AttachmentIn 对齐）：url 为 base64 data URL */
+export interface MsgAttachment {
+  type: 'image'
+  url: string
+  filename?: string
 }
 
-class WebSocketClient {
-  private ws: WebSocket | null = null
+class BridgeClient {
   private status: WsStatus = 'disconnected'
-  /** 已订阅会话集合：保持多会话订阅以接收未读/状态更新，重连时全部恢复 */
-  private readonly subscriptions = new Set<string>()
-  private reconnectDelay = RECONNECT_BASE_MS
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private manualClose = false
   private readonly eventHandlers = new Set<EventHandler>()
   private readonly statusHandlers = new Set<StatusHandler>()
+  private readonly errorHandlers = new Set<ErrorHandler>()
+  private disposers: Array<() => void> = []
 
   connect(): void {
-    if (
-      this.ws &&
-      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
-    ) {
+    if (this.disposers.length > 0) return // 已接线（桥连接由主进程托管，无需重复订阅）
+    const b = window.bridge
+    if (!b) {
+      this.setStatus('disconnected')
       return
     }
-    this.manualClose = false
-    this.setStatus('connecting')
-
-    const ws = new WebSocket(deriveWsUrl())
-    this.ws = ws
-
-    ws.onopen = () => {
-      this.reconnectDelay = RECONNECT_BASE_MS
-      this.setStatus('connected')
-      // 重连成功后恢复全部订阅
-      this.subscriptions.forEach((conversationId) => {
-        this.rawSend({ action: 'subscribe', payload: { conversationId } })
+    this.disposers.push(
+      b.onEvent((frame) => {
+        const normalized: WsServerFrame = {
+          type: frame.type,
+          conversationId: frame.conversationId,
+          data: frame.data ?? {}
+        }
+        this.eventHandlers.forEach((h) => h(normalized))
       })
-    }
-
-    ws.onmessage = (e) => {
-      let frame: WsServerFrame
-      try {
-        frame = JSON.parse(e.data as string)
-      } catch {
-        return
-      }
-      if (frame.type === 'ping') {
-        this.rawSend({ action: 'pong' })
-        return
-      }
-      this.eventHandlers.forEach((h) => h(frame))
-    }
-
-    ws.onclose = () => {
-      if (this.ws === ws) this.ws = null
-      this.setStatus('disconnected')
-      if (!this.manualClose) this.scheduleReconnect()
-    }
-
-    ws.onerror = () => {
-      // 错误后浏览器会随即触发 onclose，由 onclose 统一处理重连
-    }
+    )
+    this.disposers.push(b.onStatus((s) => this.setStatus(s)))
+    this.disposers.push(b.onError((reason) => this.errorHandlers.forEach((h) => h(reason))))
+    void b.getStatus().then((s) => this.setStatus(s))
   }
 
   disconnect(): void {
-    this.manualClose = true
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-    this.ws?.close()
-    this.ws = null
+    this.disposers.forEach((d) => d())
+    this.disposers = []
     this.setStatus('disconnected')
   }
 
+  // 桥模式下只有单一消费者，订阅是隐式的（事件按 conversationId 在 store 内过滤），
+  // 保留以下空实现仅为兼容原 WebSocket 客户端的调用方
   subscribe(conversationId: string): void {
-    // 记录订阅；未连接时由 onopen 重发，连接中则立即发送
-    this.subscriptions.add(conversationId)
-    this.rawSend({ action: 'subscribe', payload: { conversationId } })
+    void conversationId // no-op：桥不需要按会话订阅
   }
 
   unsubscribe(conversationId: string): void {
-    this.subscriptions.delete(conversationId)
-    this.rawSend({ action: 'unsubscribe', payload: { conversationId } })
+    void conversationId // no-op：桥不需要按会话退订
   }
 
-  sendMessage(conversationId: string, content: string, targetAgent?: string): boolean {
-    return this.rawSend({
-      action: 'send_message',
-      payload: { conversationId, content, targetAgent }
-    })
+  // 等待桥响应并校验后端 status：非 2xx 不再被静默吞掉，错误回灌给上层提示/重发
+  async sendMessage(
+    conversationId: string,
+    content: string,
+    targetAgent?: string,
+    attachments?: MsgAttachment[]
+  ): Promise<SendResult> {
+    const b = window.bridge
+    if (!b || this.status !== 'connected') {
+      return { ok: false, reason: t('errors.engineNotReady') }
+    }
+    try {
+      const res = await b.sendMessage({
+        conversationId,
+        content,
+        ...(targetAgent ? { targetAgent } : {}),
+        ...(attachments && attachments.length ? { attachments } : {})
+      })
+      if (res.status < 200 || res.status >= 300) {
+        const text = typeof res.body === 'string' ? res.body : JSON.stringify(res.body)
+        return { ok: false, reason: t('errors.sendFailed', { status: res.status, text }) }
+      }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : t('errors.sendRetry') }
+    }
   }
 
   onEvent(handler: EventHandler): void {
@@ -123,24 +115,16 @@ class WebSocketClient {
     this.statusHandlers.delete(handler)
   }
 
+  onError(handler: ErrorHandler): void {
+    this.errorHandlers.add(handler)
+  }
+
+  offError(handler: ErrorHandler): void {
+    this.errorHandlers.delete(handler)
+  }
+
   getStatus(): WsStatus {
     return this.status
-  }
-
-  private rawSend(payload: object): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
-    this.ws.send(JSON.stringify(payload))
-    return true
-  }
-
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) return
-    const delay = this.reconnectDelay
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null
-      this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS)
-      this.connect()
-    }, delay)
   }
 
   private setStatus(status: WsStatus): void {
@@ -150,4 +134,4 @@ class WebSocketClient {
   }
 }
 
-export const wsClient = new WebSocketClient()
+export const wsClient = new BridgeClient()

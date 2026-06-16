@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Bot, Sun, Moon } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { setThemePreference } from '../../services/theme'
+import { useT } from '../../i18n'
 
 function isDarkNow(): boolean {
   return document.documentElement.dataset.theme === 'dark'
@@ -10,6 +11,7 @@ function isDarkNow(): boolean {
 /** frameless 一体化标题栏：40px 拖拽区，左 Logo+产品名，中当前会话，右主题切换。
  *  Win 窗口控制键由系统 titleBarOverlay 绘制（右侧预留），mac 左侧预留 traffic lights。 */
 export function TitleBar(): React.JSX.Element | null {
+  const tr = useT()
   const activePage = useAppStore((s) => s.activePage)
   const activeId = useAppStore((s) => s.activeConversationId)
   const conversations = useAppStore((s) => s.conversations)
@@ -82,7 +84,7 @@ export function TitleBar(): React.JSX.Element | null {
       <div className="titlebar-no-drag flex items-center gap-1 shrink-0">
         <button
           onClick={toggleTheme}
-          title={dark ? '切换为亮色' : '切换为暗色'}
+          title={dark ? tr('titlebar.toLight') : tr('titlebar.toDark')}
           className="btn-press flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
           style={{ color: 'var(--color-text-secondary)' }}
         >

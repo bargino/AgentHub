@@ -27,6 +27,7 @@ import asyncio
 import importlib.metadata
 import json
 import logging
+import os
 import re
 import threading
 import uuid
@@ -40,6 +41,7 @@ from app.adapters.base import (
     UnifiedEvent,
     UnifiedSandboxLevel,
 )
+from app.adapters.attachments import to_codex_items
 from app.adapters.codex.notification_converter import ADAPTER_NAME, convert_notification
 from app.config import LocalMCPConfig, load_mcp_servers
 from app.security.command_whitelist import CommandVerdict, check_command
@@ -47,6 +49,33 @@ from app.security.command_whitelist import CommandVerdict, check_command
 logger = logging.getLogger(__name__)
 
 _TOML_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _provider_overrides(provider: dict) -> tuple[list[str], dict[str, str]]:
+    """per-agent 供应商 -> (config_overrides, env)。
+
+    base_url 定义独立 provider（agenthub），auth_token 经 env OPENAI_API_KEY 注入；
+    wire_api 默认 responses（codex 0.137+ 已废弃 chat，见 codex discussions/7782）。
+    未配 base_url 返回空（走 codex 本地登录态 / 默认 provider）。
+    """
+    overrides: list[str] = []
+    env: dict[str, str] = {}
+    if not isinstance(provider, dict):
+        return overrides, env
+    if provider.get("auth_token"):
+        env["OPENAI_API_KEY"] = str(provider["auth_token"])
+    if provider.get("base_url"):
+        # 剥离引号防止破坏 -c key="value" 的 TOML 字面量
+        base_url = str(provider["base_url"]).replace('"', "").replace("'", "")
+        wire_api = str(provider.get("wire_api") or "responses").replace('"', "").replace("'", "")
+        overrides.extend([
+            'model_providers.agenthub.name="AgentHub Provider"',
+            f'model_providers.agenthub.base_url="{base_url}"',
+            'model_providers.agenthub.env_key="OPENAI_API_KEY"',
+            f'model_providers.agenthub.wire_api="{wire_api}"',
+            'model_provider="agenthub"',
+        ])
+    return overrides, env
 
 
 def _mcp_config_overrides(servers: dict[str, Any] | None = None) -> list[str]:
@@ -86,6 +115,34 @@ SANDBOX_WIRE: dict[UnifiedSandboxLevel, str] = {
 
 _APPROVAL_METHOD_COMMAND = "item/commandExecution/requestApproval"
 _APPROVAL_METHOD_FILE_CHANGE = "item/fileChange/requestApproval"
+
+
+def _auto_decision_event(
+    decision: str,
+    source: str,
+    info: dict[str, Any],
+    *,
+    reason: str | None = None,
+    risk_level: str = "low",
+) -> UnifiedEvent:
+    """自动审批决策（whitelist / policy）-> 独立 approval_auto 事件。
+
+    与人工审批分流：approval_request / approval_resolved 严格只用于人工审批且成对，
+    自动决策不再产生无配对的 resolved（对齐 AG-UI policy_hold≠human_approval、
+    Claude SDK can_use_tool 仅在 ask 时触发）。decision 取 "allow" | "deny"。
+    """
+    data: dict[str, Any] = {
+        "id": uuid.uuid4().hex,
+        "decision": decision,
+        "approved": decision == "allow",
+        "source": source,
+        **info,
+    }
+    if reason:
+        data["reason"] = reason
+    return UnifiedEvent(
+        type="approval_auto", data=data, adapter=ADAPTER_NAME, risk_level=risk_level
+    )
 
 
 @dataclass
@@ -190,7 +247,9 @@ class CodexAdapter(ICodeAdapter):
         def approval_handler(method: str, params: dict[str, Any] | None) -> dict[str, Any]:
             info = describe_request(method, params or {})
 
-            # 白名单三级前置判定（仅命令执行）：ALLOWED 放行 / BLOCKED 拦截
+            # 白名单三级前置判定（仅命令执行）：ALLOWED 放行 / BLOCKED 拦截。
+            # 自动决策走独立 approval_auto 事件（见 _auto_decision_event），不占用
+            # approval_request/approval_resolved 人工审批通道。
             if (
                 self._whitelist_precheck
                 and method == _APPROVAL_METHOD_COMMAND
@@ -198,32 +257,18 @@ class CodexAdapter(ICodeAdapter):
             ):
                 result = check_command(str(info["command"]))
                 if result.verdict is CommandVerdict.ALLOWED:
-                    emit(UnifiedEvent(
-                        type="approval_resolved",
-                        data={"approved": True, "source": "whitelist", **info},
-                        adapter=self.name,
-                    ))
+                    emit(_auto_decision_event("allow", "whitelist", info))
                     return {"decision": "accept"}
                 if result.verdict is CommandVerdict.BLOCKED:
-                    emit(UnifiedEvent(
-                        type="approval_resolved",
-                        data={
-                            "approved": False, "source": "whitelist",
-                            "reason": result.reason, **info,
-                        },
-                        adapter=self.name,
-                        risk_level="high",
+                    emit(_auto_decision_event(
+                        "deny", "whitelist", info,
+                        reason=result.reason, risk_level="high",
                     ))
                     return {"decision": "decline"}
 
             if auto_decision is not None:
-                emit(UnifiedEvent(
-                    type="approval_resolved",
-                    data={
-                        "approved": auto_decision == "accept",
-                        "source": "policy", **info,
-                    },
-                    adapter=self.name,
+                emit(_auto_decision_event(
+                    "allow" if auto_decision == "accept" else "deny", "policy", info
                 ))
                 return {"decision": auto_decision}
 
@@ -267,25 +312,28 @@ class CodexAdapter(ICodeAdapter):
         # base_url 经 config_overrides 定义独立 provider（等价 CLI -c key=value），
         # 不写 ~/.codex 全局配置；未配置时走本地登录态
         sdk_env: dict[str, str] = {}
+        # codex 隔离：配置独立 CODEX_HOME 时不读用户 ~/.codex（避免桌面端 / 切换工具写的
+        # config 与 SDK 内置开源 codex CLI schema 冲突）；provider 全靠 override + env 注入
+        codex_home = self._config.get("codex_home")
+        if codex_home:
+            codex_home = os.path.expanduser(str(codex_home))
+            os.makedirs(codex_home, exist_ok=True)
+            sdk_env["CODEX_HOME"] = codex_home
         # MCP 经 -c 覆盖注入子进程：优先 per-agent 解析集合，未限定回退全局
         overrides: list[str] = _mcp_config_overrides(ctx.mcp_servers)
         # 有效上下文窗口透传 codex（官方 model_context_window，override when unknown），
         # 让 codex 自身 auto-compact 用对窗口，与 agenthub 记忆层口径一致
         if ctx.context_window:
             overrides.append(f"model_context_window={int(ctx.context_window)}")
-        provider = ctx.provider or {}
-        if provider.get("auth_token"):
-            sdk_env["OPENAI_API_KEY"] = provider["auth_token"]
-        if provider.get("base_url"):
-            # 剥离引号防止破坏 -c key="value" 的 TOML 字面量
-            base_url = provider["base_url"].replace('"', "").replace("'", "")
-            overrides.extend([
-                'model_providers.agenthub.name="AgentHub Provider"',
-                f'model_providers.agenthub.base_url="{base_url}"',
-                'model_providers.agenthub.env_key="OPENAI_API_KEY"',
-                'model_providers.agenthub.wire_api="chat"',
-                'model_provider="agenthub"',
-            ])
+        # reasoning 摘要：请求 codex 产出推理摘要（item/reasoning/summaryTextDelta 增量），
+        # 供前端 ThinkingCard 展示思考过程。需模型支持 Responses 推理摘要且网关转发该事件；
+        # 不支持时 codex 静默不产出（不影响正常执行）。
+        overrides.append('model_reasoning_summary="auto"')
+        overrides.append("model_supports_reasoning_summaries=true")
+        # per-agent 供应商：base_url 定义独立 provider，auth_token 经 env 注入，wire_api 可配
+        prov_overrides, prov_env = _provider_overrides(ctx.provider or {})
+        overrides.extend(prov_overrides)
+        sdk_env.update(prov_env)
 
         def worker() -> None:
             client = None
@@ -314,7 +362,16 @@ class CodexAdapter(ICodeAdapter):
                     adapter=self.name,
                 ))
 
-                turn = client.turn_start(thread_id, ctx.instructions)
+                # 多模态：有图片附件时 input_items=[text + localImage...]（turn_start 接
+                # list[dict]，见 openai_codex._inputs），否则保持纯文本字符串
+                codex_items = to_codex_items(ctx.attachments)
+                if codex_items:
+                    turn = client.turn_start(
+                        thread_id,
+                        [{"type": "text", "text": ctx.instructions}, *codex_items],
+                    )
+                else:
+                    turn = client.turn_start(thread_id, ctx.instructions)
                 turn_id = turn.turn.id
                 active.turn_id = turn_id
 

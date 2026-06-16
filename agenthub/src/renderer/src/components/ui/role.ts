@@ -39,6 +39,22 @@ export function getRoleColor(role: AgentRole): string {
   return ROLE_CONFIG[role]?.color ?? customRoleConfig(role).color
 }
 
+// 角色双色渐变（取自原型 .grad-* 配色），用于头像/群头像，区别于扁平色块
+const ROLE_GRADIENTS: Record<string, string> = {
+  orchestrator: 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+  planner: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
+  coder: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)',
+  reviewer: 'linear-gradient(135deg, #f97316 0%, #f59e0b 100%)',
+  preview: 'linear-gradient(135deg, #22c55e 0%, #10b981 100%)',
+  deployer: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)'
+}
+
+export function getRoleGradient(role: AgentRole): string {
+  if (ROLE_GRADIENTS[role]) return ROLE_GRADIENTS[role]
+  const c = customRoleConfig(role).color
+  return `linear-gradient(135deg, ${c} 0%, color-mix(in srgb, ${c} 68%, #000 18%) 100%)`
+}
+
 export function getRoleLabel(role: AgentRole): string {
   return ROLE_CONFIG[role]?.label ?? role
 }

@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.core.registry import AdapterRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +27,14 @@ class PendingApproval:
     adapter_name: str  # 适配器名（registry key）
     request_id: str  # 适配器域审批请求 ID
     conversation_id: str
+
+
+class ResolveOutcome(str, Enum):
+    """resolve() 结果，供调用方区分「正常解除」「无需回传」「无法解除」三类。"""
+
+    RESOLVED = "resolved"  # 已成功把决策回传 adapter，Agent 解除阻塞
+    NO_BINDING = "no_binding"  # 纯业务审批（无 adapter request_id），无需回传
+    ADAPTER_UNAVAILABLE = "adapter_unavailable"  # 绑定了 adapter 但无法解除（重启/超时/已结束）
 
 
 class ApprovalCoordinator:
@@ -50,22 +63,36 @@ class ApprovalCoordinator:
     def pop(self, approval_id: str) -> PendingApproval | None:
         return self._pending.pop(approval_id, None)
 
-    async def resolve(self, approval_id: str, approved: bool, registry) -> bool:
-        """回传用户决策给适配器。registry: AdapterRegistry。"""
-        pending = self.pop(approval_id)
-        if not pending:
-            logger.warning("Approval %s not found in coordinator", approval_id)
-            return False
-        adapter = registry.get(pending.adapter_name)
+    async def resolve(
+        self,
+        approval_id: str,
+        approved: bool,
+        registry: AdapterRegistry,
+        *,
+        fallback: PendingApproval | None = None,
+    ) -> ResolveOutcome:
+        """回传用户决策给适配器。
+
+        内存映射未命中时回退 DB 持久化的 fallback（进程重启后仍能定位 adapter/request），
+        据此区分三种结果：纯业务审批（无绑定）/ 已解除 / 绑定存在但无法解除。
+        """
+        pending = self.pop(approval_id) or fallback
+        if pending is None or not pending.request_id:
+            # 无 adapter 绑定 = 纯业务审批（如规划期 deployer 审批），无需回传
+            return ResolveOutcome.NO_BINDING
+        adapter = registry.get(pending.adapter_name) if pending.adapter_name else None
         if not adapter:
-            logger.warning("Adapter %s not found for approval %s", pending.adapter_name, approval_id)
-            return False
+            logger.warning(
+                "Adapter %s unavailable for approval %s", pending.adapter_name, approval_id
+            )
+            return ResolveOutcome.ADAPTER_UNAVAILABLE
         ok = await adapter.resolve_approval(pending.request_id, approved)
         logger.info(
             "Approval %s -> adapter=%s request=%s approved=%s ok=%s",
             approval_id, pending.adapter_name, pending.request_id, approved, ok,
         )
-        return ok
+        # adapter 返回 False = 在途审批请求已不在（重启/超时/已结束），无法真正解除
+        return ResolveOutcome.RESOLVED if ok else ResolveOutcome.ADAPTER_UNAVAILABLE
 
 
 _coordinator: ApprovalCoordinator | None = None

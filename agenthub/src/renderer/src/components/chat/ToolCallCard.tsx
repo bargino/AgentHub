@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Message } from '../../types'
 import { Badge } from '../ui/Badge'
 import { getRoleColor } from '../ui/role'
+import { useT } from '../../i18n'
 
 const STATUS_CONFIG = {
   running: {
@@ -10,21 +11,21 @@ const STATUS_CONFIG = {
     iconColor: 'var(--color-brand)',
     animate: true,
     badgeVariant: 'brand' as const,
-    label: '执行中'
+    labelKey: 'chat.tools.statusRunning'
   },
   success: {
     icon: Check,
     iconColor: 'var(--color-success)',
     animate: false,
     badgeVariant: 'success' as const,
-    label: '完成'
+    labelKey: 'chat.tools.statusDone'
   },
   failed: {
     icon: XCircle,
     iconColor: 'var(--color-error)',
     animate: false,
     badgeVariant: 'error' as const,
-    label: '失败'
+    labelKey: 'chat.tools.statusFailed'
   }
 }
 
@@ -50,25 +51,27 @@ export function ToolCallCard({
   msg: Message
   compact?: boolean
 }): React.JSX.Element {
+  const tr = useT()
   const status = msg.toolStatus ?? 'running'
   const running = status === 'running'
-  const [open, setOpen] = useState(running)
-  const userToggled = useRef(false)
+  const [expanded, setExpanded] = useState(running)
+  const [userToggled, setUserToggled] = useState(false)
+  const [prevRunning, setPrevRunning] = useState(running)
   const bodyRef = useRef<HTMLDivElement>(null)
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.running
 
-  // 执行结束：未被用户手动操作过则自动收起；执行中自动展开
-  useEffect(() => {
-    if (userToggled.current) return
-    setOpen(running)
-  }, [running])
+  // 未被用户手动开合过则跟随执行态：执行中展开、结束自动收起（渲染期同步复位）
+  if (running !== prevRunning) {
+    setPrevRunning(running)
+    if (!userToggled) setExpanded(running)
+  }
 
   // 执行中输出跟随到底部
   useEffect(() => {
-    if (running && open && bodyRef.current) {
+    if (running && expanded && bodyRef.current) {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight
     }
-  }, [msg.content, running, open])
+  }, [msg.content, running, expanded])
 
   const StatusIcon = config.icon
   const summary = inputSummary(msg.content)
@@ -103,8 +106,8 @@ export function ToolCallCard({
       )}
       <button
         onClick={() => {
-          userToggled.current = true
-          setOpen(!open)
+          setUserToggled(true)
+          setExpanded(!expanded)
         }}
         className="flex items-center gap-2 w-full px-3 py-2 border-none bg-transparent cursor-pointer hover-spotlight"
       >
@@ -113,7 +116,7 @@ export function ToolCallCard({
           className="shrink-0 transition-transform duration-200"
           style={{
             color: 'var(--color-text-tertiary)',
-            transform: open ? 'rotate(90deg)' : 'rotate(0deg)'
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)'
           }}
         />
         <Terminal size={14} className="shrink-0" style={{ color: 'var(--color-text-secondary)' }} />
@@ -155,11 +158,11 @@ export function ToolCallCard({
           style={{ color: config.iconColor }}
         />
         <Badge variant={config.badgeVariant} size="sm">
-          {config.label}
+          {tr(config.labelKey)}
         </Badge>
       </button>
 
-      {open && msg.content && (
+      {expanded && msg.content && (
         <div
           ref={bodyRef}
           className="px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap break-all max-h-60 overflow-y-auto"

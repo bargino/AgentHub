@@ -25,10 +25,13 @@ EventType = Literal[
     "tool_call",
     "approval_request",
     "approval_resolved",
+    "approval_auto",
     "diff_update",
     "file_change",
     "completed",
     "error",
+    # 瞬时错误（SDK 自动重试中，will_retry）：走 ephemeral 通道，不落消息/不污染上下文
+    "transient_error",
 ]
 
 
@@ -55,7 +58,8 @@ class AdapterContext:
     approval_mode: UnifiedApprovalMode = UnifiedApprovalMode.REVIEW_EDITS
     sandbox_level: UnifiedSandboxLevel = UnifiedSandboxLevel.WORKSPACE_WRITE
     model: Optional[str] = None
-    # 独立 API 供应商 {"base_url": str, "auth_token": str}（None/空 = 本地 SDK 登录态）；
+    # 独立 API 供应商 {"base_url": str, "auth_token": str, "wire_api"?: str}
+    # （None/空 = 本地 SDK 登录态）；codex 用 wire_api（默认 chat，可配 responses）。
     # 由各 adapter 映射为 SDK 子进程 env / config_overrides，实现 per-agent 隔离
     provider: Optional[dict[str, str]] = None
     # 会话级技能覆盖："all" | [技能名] | "off"（关闭）| None（跟随全局配置）
@@ -68,6 +72,10 @@ class AdapterContext:
     # 该 agent 解析后的 MCP 服务器集合（context_builder 按 capabilities.mcp_servers
     # 允许清单过滤全局配置）；None = 未限定，adapter 回退全局 load_mcp_servers()
     mcp_servers: Optional[dict[str, Any]] = None
+    # 多模态附件（统一契约）：[{type:"image", mime, path, filename?}]，落盘存路径；
+    # 各 adapter 转换为自身 SDK 图片输入（claude=base64 block / codex=本地路径）。
+    # None/空 = 纯文本，行为与改动前完全一致。
+    attachments: Optional[list[dict[str, Any]]] = None
 
 
 class ICodeAdapter(ABC):
@@ -94,3 +102,8 @@ class ICodeAdapter(ABC):
     @abstractmethod
     async def interrupt(self) -> bool:
         ...
+
+    @property
+    def light_model(self) -> str | None:
+        """#6 内部轻量 LLM 任务（规划/摘要）用的小模型；None = 回退默认模型。"""
+        return getattr(self, "_config", {}).get("light_model")

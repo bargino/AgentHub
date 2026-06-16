@@ -5,19 +5,47 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
 from datetime import datetime, timezone
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.event_bus import get_event_bus
-from app.db.models import Conversation, Message
+from app.db.engine import get_data_dir
+from app.db.models import (
+    AgentEventRecord,
+    AgentSessionRecord,
+    Approval,
+    BlackboardEntry,
+    Conversation,
+    DiffRecord,
+    Message,
+    Task,
+    Workspace,
+)
 from app.schemas import (
     ConversationCreate,
     ConversationOut,
     ConversationUpdate,
     WSEvent,
     fmt_time,
+)
+
+logger = logging.getLogger(__name__)
+
+# 删除会话时一并清理的子表（均以 conversation_id 关联）
+_CHILD_MODELS = (
+    Message,
+    Task,
+    AgentSessionRecord,
+    AgentEventRecord,
+    BlackboardEntry,
+    DiffRecord,
+    Approval,
+    Workspace,
 )
 
 
@@ -164,3 +192,32 @@ async def update_status(session: AsyncSession, conversation_id: str, status: str
             data={"conversation": out.model_dump(by_alias=True)},
         )
     )
+
+
+def _purge_workspace_dir(conversation_id: str) -> None:
+    """删除会话隔离 workspace 目录（安全围栏：必须恰好是 <data_dir>/workspaces/<cid>）。"""
+    try:
+        ws_root = (get_data_dir() / "workspaces").resolve()
+        target = (ws_root / conversation_id).resolve()
+        if target.parent == ws_root and target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    except OSError:
+        logger.warning("清理 workspace 目录失败：%s", conversation_id, exc_info=True)
+
+
+async def delete_conversation(session: AsyncSession, conversation_id: str) -> bool:
+    """永久删除会话：级联清理全部子表 + workspace 目录。不存在返回 False。
+
+    与归档（软隐藏、保留数据、可恢复）不同，删除不可恢复。
+    """
+    conv = await session.get(Conversation, conversation_id)
+    if conv is None:
+        return False
+    for model in _CHILD_MODELS:
+        await session.execute(
+            sa_delete(model).where(model.conversation_id == conversation_id)
+        )
+    await session.delete(conv)
+    await session.flush()
+    _purge_workspace_dir(conversation_id)
+    return True

@@ -16,6 +16,8 @@ class AppSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8642
     debug: bool = False
+    # 写型任务成功后是否自动提交（推进基线）；默认仅 git add 暂存，避免意外推进基线
+    auto_commit_on_task: bool = False
 
     class Config:
         env_file = ".env"

@@ -1,12 +1,14 @@
 import { useMemo } from 'react'
 import { useAppStore } from '../../store'
 import { Avatar } from '../ui/Avatar'
-import { getRoleLabel } from '../ui/role'
+import { getRoleLabel, getRoleColor } from '../ui/role'
+import { useT } from '../../i18n'
 
 /** 输入框上方的 Agent 实时状态条：会话运行中时显示哪些 Agent 正在工作。
  *  有 running 任务时逐个列出执行者；无任务（编排决策阶段）显示 Orchestrator 调度中。
  *  空闲时不渲染（零高度，不挤占消息流）。 */
 export function AgentStatusBar(): React.JSX.Element | null {
+  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
   const conversations = useAppStore((s) => s.conversations)
   const tasksMap = useAppStore((s) => s.tasks)
@@ -21,13 +23,22 @@ export function AgentStatusBar(): React.JSX.Element | null {
 
   const entries =
     runningTasks.length > 0
-      ? runningTasks.map((t) => ({
-          key: t.id,
-          role: t.agentRole,
-          label: getRoleLabel(t.agentRole),
-          status: t.title ? `正在：${t.title}` : '工作中…'
+      ? runningTasks.map((task) => ({
+          key: task.id,
+          role: task.agentRole,
+          label: getRoleLabel(task.agentRole),
+          status: task.title
+            ? tr('chat.statusBar.doing', { title: task.title })
+            : tr('chat.statusBar.working')
         }))
-      : [{ key: 'orchestrator', role: 'orchestrator', label: 'Orchestrator', status: '调度中…' }]
+      : [
+          {
+            key: 'orchestrator',
+            role: 'orchestrator',
+            label: 'Orchestrator',
+            status: tr('chat.statusBar.scheduling')
+          }
+        ]
 
   return (
     <div
@@ -38,11 +49,18 @@ export function AgentStatusBar(): React.JSX.Element | null {
       }}
     >
       {entries.map((e) => (
-        <div key={e.key} className="flex items-center gap-1.5 min-w-0">
+        <div
+          key={e.key}
+          className="flex items-center gap-1.5 min-w-0 rounded-full pl-1 pr-2.5 py-1"
+          style={{
+            background: `color-mix(in srgb, ${getRoleColor(e.role)} 10%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${getRoleColor(e.role)} 22%, transparent)`
+          }}
+        >
           <Avatar role={e.role} size="xs" />
           <span
-            className="text-[11px] font-medium shrink-0"
-            style={{ color: 'var(--color-text-secondary)' }}
+            className="text-[11px] font-semibold shrink-0"
+            style={{ color: getRoleColor(e.role) }}
           >
             {e.label}
           </span>

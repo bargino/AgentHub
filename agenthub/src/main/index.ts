@@ -3,7 +3,16 @@ import { join } from 'path'
 import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { checkBackendHealth, ensureBackend, stopBackend } from './backend'
+import {
+  bridgeRequest,
+  bridgeSendMessage,
+  getBridgeError,
+  getBridgeStatus,
+  restartBridge,
+  startBridge,
+  stopBridge,
+  type BridgeRequest
+} from './bridge'
 
 interface WindowState {
   width: number
@@ -52,6 +61,19 @@ function createWindow(): void {
   // Create the browser window.
   // frameless 一体化标题栏：Win 用系统 titleBarOverlay 绘制窗口控制键，
   // mac 用 hidden 保留 traffic lights，Linux 不支持 overlay 保持系统标题栏
+  // 亚克力 / 云母半透材质：Win11 用 mica，macOS 用 vibrancy；
+  // 背景设为全透明，让标题栏 + 左侧导航等半透明区域透出系统材质（不支持的平台自动降级为不透明）。
+  const surfaceOptions =
+    process.platform === 'win32'
+      ? { backgroundColor: '#00000000', backgroundMaterial: 'mica' as const }
+      : process.platform === 'darwin'
+        ? {
+            backgroundColor: '#00000000',
+            vibrancy: 'under-window' as const,
+            visualEffectState: 'active' as const
+          }
+        : {}
+
   const mainWindow = new BrowserWindow({
     width: state.width,
     height: state.height,
@@ -60,6 +82,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
+    ...surfaceOptions,
     ...(process.platform === 'linux'
       ? { icon }
       : {
@@ -67,7 +90,7 @@ function createWindow(): void {
           ...(process.platform === 'win32'
             ? {
                 titleBarOverlay: {
-                  color: '#ffffff',
+                  color: '#00000000',
                   symbolColor: '#1f1f1f',
                   height: 40
                 }
@@ -76,8 +99,10 @@ function createWindow(): void {
         }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      webSecurity: false
+      // 桥模式下渲染层不再发起跨域 fetch（全走主进程 stdio 桥），
+      // 因此恢复同源策略并开启沙箱，缩小不可信内容（Markdown 链接/预览 iframe）的攻击面
+      sandbox: true,
+      webSecurity: true
     }
   })
 
@@ -126,7 +151,7 @@ app.whenReady().then(() => {
     for (const win of BrowserWindow.getAllWindows()) {
       try {
         win.setTitleBarOverlay({
-          color: dark ? '#1a1a1a' : '#ffffff',
+          color: '#00000000',
           symbolColor: dark ? '#e0e0e0' : '#1f1f1f',
           height: 40
         })
@@ -136,11 +161,21 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('backend:status', () => checkBackendHealth())
+  // 兼容旧 IPC：后端状态/重启改由 stdio 桥承载
+  ipcMain.handle('backend:status', () => ({
+    ok: getBridgeStatus() === 'connected',
+    status: getBridgeStatus()
+  }))
   ipcMain.handle('backend:restart', async () => {
-    stopBackend()
-    return ensureBackend()
+    await restartBridge()
+    return getBridgeStatus() === 'connected' ? 'spawned' : 'failed'
   })
+
+  // 进程内桥：渲染层请求 / 发送消息 / 状态查询
+  ipcMain.handle('bridge:request', (_event, req: BridgeRequest) => bridgeRequest(req))
+  ipcMain.handle('bridge:sendMessage', (_event, payload: unknown) => bridgeSendMessage(payload))
+  ipcMain.handle('bridge:status', () => getBridgeStatus())
+  ipcMain.handle('bridge:getError', () => getBridgeError())
   ipcMain.handle('dialog:selectDirectory', async () => {
     const win = BrowserWindow.getFocusedWindow()
     const result = await dialog.showOpenDialog(win!, {
@@ -161,12 +196,11 @@ app.whenReady().then(() => {
     return result.filePaths[0]
   })
 
-  createWindow()
+  // 尽早 spawn 桥（conda 解析有延迟），不阻塞窗口创建；
+  // 就绪状态经 bridge:status 推送给 renderer
+  startBridge().catch((err) => console.error('[bridge] startBridge error:', err))
 
-  // 不阻塞窗口创建，后端就绪状态由 renderer 通过 backend:status 查询
-  ensureBackend()
-    .then((result) => console.log(`[backend] ensureBackend: ${result}`))
-    .catch((err) => console.error('[backend] ensureBackend error:', err))
+  createWindow()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -176,7 +210,7 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
-  stopBackend()
+  stopBridge()
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common

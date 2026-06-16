@@ -32,14 +32,19 @@ async def record_event(
 
 
 async def list_events(
-    session: AsyncSession, conversation_id: str, limit: int = 500
+    session: AsyncSession,
+    conversation_id: str,
+    limit: int = 500,
+    after: int | None = None,
 ) -> list[dict]:
-    stmt = (
-        select(AgentEventRecord)
-        .where(AgentEventRecord.conversation_id == conversation_id)
-        .order_by(AgentEventRecord.id.asc())
-        .limit(limit)
+    # after=游标（上一页最后一条 id），按 id 升序取其后 limit 条；
+    # 杜绝大会话（>limit 事件）被静默截断丢失最新事件（观测性回放需要全量可达）。
+    stmt = select(AgentEventRecord).where(
+        AgentEventRecord.conversation_id == conversation_id
     )
+    if after is not None:
+        stmt = stmt.where(AgentEventRecord.id > after)
+    stmt = stmt.order_by(AgentEventRecord.id.asc()).limit(limit)
     records = (await session.execute(stmt)).scalars().all()
     return [
         {

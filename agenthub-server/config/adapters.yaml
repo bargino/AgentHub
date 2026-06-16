@@ -5,6 +5,8 @@ adapters:
     class: ClaudeCodeAdapter
     config:
       default_model: null
+      # #6 内部轻量任务（规划/摘要）用的小模型；null = 回退 default_model
+      light_model: null
       default_permission_mode: acceptEdits
       default_allowed_tools:
         - Read
@@ -29,8 +31,13 @@ adapters:
     class: CodexAdapter
     config:
       default_model: null
+      # #6 内部轻量任务（规划/摘要）用的小模型；null = 回退 default_model
+      light_model: null
       # 留空使用 openai-codex-cli-bin 内置 pinned runtime
       codex_bin: null
+      # codex 隔离：独立 CODEX_HOME 目录，避免读用户 ~/.codex（桌面端 / 切换工具写的
+      # config 与内置开源 codex CLI schema 冲突）；null = 用默认 ~/.codex（继承登录态）
+      codex_home: ~/.agenthub/codex-home
       # 人工审批等待超时（秒），超时按拒绝处理
       approval_timeout_s: 600
       # 命令审批白名单前置：ALLOWED 自动放行 / BLOCKED 自动拦截 / 其余人工审批

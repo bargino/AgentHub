@@ -12,9 +12,11 @@ from app.api.v1.conversations import router as conversations_router
 from app.api.v1.deploy import router as deploy_router
 from app.api.v1.diffs import router as diffs_router
 from app.api.v1.events import router as events_router
+from app.api.v1.git import router as git_router
 from app.api.v1.health import router as health_router
 from app.api.v1.preview import router as preview_router
 from app.api.v1.tasks import router as tasks_router
+from app.api.v1.workspace import router as workspace_router
 from app.api.ws.session import router as ws_router
 from app.config import get_settings, load_adapters_config
 from app.core.message_handler import set_message_handler
@@ -83,6 +85,8 @@ def create_app() -> FastAPI:
         preview_router,
         deploy_router,
         events_router,
+        git_router,
+        workspace_router,
     ]
     for router in api_routers:
         app.include_router(router, prefix="/api/v1")

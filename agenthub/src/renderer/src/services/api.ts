@@ -1,4 +1,5 @@
-import { getJson, postJson } from './http'
+import { deleteJson, getJson, patchJson, postJson } from './http'
+import { t as translate } from '../i18n'
 import type { Agent, Conversation, Message, Task, DiffRecord, Approval } from '../types'
 
 // 后端 DTO 与前端 types 仅在时间字段上有差异：ConversationOut.lastTime 与
@@ -22,7 +23,7 @@ export function formatSmartTime(iso: string | undefined, fallback: string): stri
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const t = d.getTime()
   if (t >= startOfToday) return formatTime(iso)
-  if (t >= startOfToday - 86_400_000) return '昨天'
+  if (t >= startOfToday - 86_400_000) return translate('common.yesterday')
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
@@ -66,16 +67,12 @@ export async function updateConversation(
     settings?: Record<string, unknown>
   }
 ): Promise<Conversation> {
-  const res = await fetch(
-    `${(await import('./http')).getServerBaseUrl()}/api/v1/conversations/${conversationId}`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    }
-  )
-  if (!res.ok) throw new Error(`PATCH /conversations/${conversationId} ${res.status}`)
-  return adaptConversation((await res.json()) as ConversationDTO)
+  const dto = await patchJson<ConversationDTO>(`/conversations/${conversationId}`, data)
+  return adaptConversation(dto)
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await deleteJson(`/conversations/${conversationId}`)
 }
 
 // ---- 消息 ----
@@ -127,6 +124,11 @@ export async function retryTask(taskId: string): Promise<Task> {
 // ---- Diff ----
 export async function getDiff(conversationId: string): Promise<DiffRecord | null> {
   return getJson<DiffRecord | null>(`/conversations/${conversationId}/diff`)
+}
+
+/** 按 id 取单条 diff（审查界面按 approval.diffId 联动拉取历史会话的关联 diff） */
+export async function getDiffById(diffId: string): Promise<DiffRecord> {
+  return getJson<DiffRecord>(`/diffs/${diffId}`)
 }
 
 export async function approveDiff(diffId: string): Promise<DiffRecord> {
@@ -196,6 +198,53 @@ export async function getGitLog(conversationId: string): Promise<GitCommit[]> {
   return getJson<GitCommit[]>(`/conversations/${conversationId}/git/log`)
 }
 
+// ---- 工作区文件浏览（只读 Explorer，404 = workspace 尚未创建） ----
+export interface WsTreeNode {
+  name: string
+  path: string
+  type: 'dir' | 'file'
+  size?: number
+  children?: WsTreeNode[]
+  truncated?: boolean
+}
+
+export interface WsFileContent {
+  path: string
+  content: string
+  size: number
+  binary: boolean
+  truncated?: boolean
+  tooLarge?: boolean
+}
+
+export async function getWorkspaceTree(conversationId: string): Promise<WsTreeNode> {
+  return getJson<WsTreeNode>(`/conversations/${conversationId}/workspace/tree`)
+}
+
+export async function getWorkspaceFile(
+  conversationId: string,
+  path: string
+): Promise<WsFileContent> {
+  return getJson<WsFileContent>(
+    `/conversations/${conversationId}/workspace/file?path=${encodeURIComponent(path)}`
+  )
+}
+
+// ---- 预览（dev server 启停） ----
+export interface PreviewStartResult {
+  previewUrl: string
+  port: number
+  projectType: string
+}
+
+export async function startPreview(conversationId: string): Promise<PreviewStartResult> {
+  return postJson<PreviewStartResult>(`/conversations/${conversationId}/preview/start`)
+}
+
+export async function stopPreview(conversationId: string): Promise<{ stopped: boolean }> {
+  return postJson<{ stopped: boolean }>(`/conversations/${conversationId}/preview/stop`)
+}
+
 // ---- Agent ----
 export async function getAgents(): Promise<Agent[]> {
   return getJson<Agent[]>('/agents')
@@ -228,13 +277,5 @@ export async function updateAgent(
     enabled?: boolean
   }
 ): Promise<Agent> {
-  const url = `/agents/${agentId}`
-  const res = await fetch(`${(await import('./http')).getServerBaseUrl()}/api/v1${url}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  const text = await res.text()
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`)
-  return JSON.parse(text) as Agent
+  return patchJson<Agent>(`/agents/${agentId}`, data)
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ListTodo,
-  GitBranch,
+  FileDiff,
   Monitor,
   MessageCircle,
   Users,
@@ -11,7 +11,7 @@ import {
   SquareSlash
 } from 'lucide-react'
 import { useAppStore, resolveMembers } from '../../store'
-import type { Message } from '../../types'
+import type { Message, RightTab } from '../../types'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallGroup } from './ToolCallGroup'
 import { MessageInput } from './MessageInput'
@@ -19,9 +19,11 @@ import { AgentStatusBar } from './AgentStatusBar'
 import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
 import { getRoleColor, getRoleLabel } from '../ui/role'
+import { useT, t as tFn } from '../../i18n'
 
 /** 顶栏成员头像堆叠（前 4 + 「+N」），点击打开群设置 */
 function MemberStack(): React.JSX.Element | null {
+  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
   const conversations = useAppStore((s) => s.conversations)
   const agents = useAppStore((s) => s.agents)
@@ -36,7 +38,7 @@ function MemberStack(): React.JSX.Element | null {
   return (
     <button
       onClick={() => useAppStore.getState().toggleGroupPanel()}
-      title={`群成员 ${members.length} 人，点击管理`}
+      title={tr('chat.memberStackTitle', { count: members.length })}
       className="flex items-center border-none bg-transparent cursor-pointer pl-1"
     >
       {shown.map((m, i) => (
@@ -123,7 +125,7 @@ function timeGroupLabel(iso: string): string {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const t = d.getTime()
   if (t >= startOfToday) return hm
-  if (t >= startOfToday - 86_400_000) return `昨天 ${hm}`
+  if (t >= startOfToday - 86_400_000) return tFn('chat.yesterday', { time: hm })
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`
 }
 
@@ -177,6 +179,7 @@ function buildFeed(messages: Message[]): FeedItem[] {
 
 /** 历史消息分页：滚动区顶部的"加载更早"入口 */
 function LoadOlderButton({ onLoad }: { onLoad: () => void }): React.JSX.Element | null {
+  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
   const hasMore = useAppStore((s) => (activeId ? s.hasMoreHistory[activeId] : false))
   const loading = useAppStore((s) => s.loadingHistory)
@@ -194,7 +197,7 @@ function LoadOlderButton({ onLoad }: { onLoad: () => void }): React.JSX.Element 
           color: 'var(--color-text-secondary)'
         }}
       >
-        {loading ? '加载中…' : '加载更早的消息'}
+        {loading ? tr('chat.loading') : tr('chat.loadOlder')}
       </button>
     </div>
   )
@@ -235,6 +238,7 @@ function WorkingIndicator({ role, name }: { role?: string; name?: string }): Rea
 const ORBIT_ROLES = ['orchestrator', 'planner', 'coder', 'reviewer', 'preview', 'deployer']
 
 function EmptyState(): React.JSX.Element {
+  const tr = useT()
   return (
     <div
       className="flex-1 flex items-center justify-center relative overflow-hidden"
@@ -302,10 +306,10 @@ function EmptyState(): React.JSX.Element {
         </div>
 
         <p className="text-[15px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-          多 Agent 协作工作台
+          {tr('chat.empty.title')}
         </p>
         <p className="text-xs mt-1.5 mb-7" style={{ color: 'var(--color-text-secondary)' }}>
-          选择或新建一个会话，让 AI 团队为你工作
+          {tr('chat.empty.subtitle')}
         </p>
 
         {/* 引导卡片 */}
@@ -325,10 +329,10 @@ function EmptyState(): React.JSX.Element {
               <FolderPlus size={15} color="#fff" />
             </span>
             <div className="text-xs font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-              新建项目会话
+              {tr('chat.empty.newProjectTitle')}
             </div>
             <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              关联本地项目，组建 Agent 群
+              {tr('chat.empty.newProjectDesc')}
             </div>
           </button>
           <div
@@ -345,10 +349,10 @@ function EmptyState(): React.JSX.Element {
               <AtSign size={15} style={{ color: 'var(--color-brand)' }} />
             </span>
             <div className="text-xs font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-              @Agent 直达
+              {tr('chat.empty.mentionTitle')}
             </div>
             <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              @coder 改这里、@reviewer 审查
+              {tr('chat.empty.mentionDesc')}
             </div>
           </div>
           <div
@@ -365,10 +369,10 @@ function EmptyState(): React.JSX.Element {
               <SquareSlash size={15} style={{ color: 'var(--color-brand)' }} />
             </span>
             <div className="text-xs font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-              / 快捷命令
+              {tr('chat.empty.slashTitle')}
             </div>
             <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              /plan 出方案、/tasks 看进度
+              {tr('chat.empty.slashDesc')}
             </div>
           </div>
         </div>
@@ -378,6 +382,7 @@ function EmptyState(): React.JSX.Element {
 }
 
 export function ChatWindow(): React.JSX.Element {
+  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
   const conversations = useAppStore((s) => s.conversations)
   const messagesMap = useAppStore((s) => s.messages)
@@ -389,15 +394,13 @@ export function ChatWindow(): React.JSX.Element {
   const activeDiff = useAppStore((s) => s.activeDiff)
   const previewUrl = useAppStore((s) => s.previewUrl)
   const groupPanelOpen = useAppStore((s) => s.groupPanelOpen)
-  const gitPanelOpen = useAppStore((s) => s.gitPanelOpen)
+  const rightTab = useAppStore((s) => s.rightTab)
+  const pendingCount = useAppStore((s) => s.pendingApprovals.length)
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
 
-  const toggleTask = (): void => useAppStore.getState().toggleTaskPanel()
-  const toggleDiff = (): void => useAppStore.getState().toggleDiffPanel()
-  const togglePreview = (): void => useAppStore.getState().togglePreviewPanel()
+  const setTab = (tab: RightTab): void => useAppStore.getState().setRightTab(tab)
   const toggleGroup = (): void => useAppStore.getState().toggleGroupPanel()
-  const toggleGit = (): void => useAppStore.getState().toggleGitPanel()
 
   const conv = conversations.find((c) => c.id === activeId)
 
@@ -444,7 +447,7 @@ export function ChatWindow(): React.JSX.Element {
     lastMsg?.type === 'tool' && (lastMsg.toolStatus ?? 'running') === 'running'
   const showWorking = conv?.status === 'running' && !lastMsg?.streaming && !lastToolRunning
   const runningTask = (activeId ? (tasksMap[activeId] ?? []) : []).find(
-    (t) => t.status === 'running'
+    (task) => task.status === 'running'
   )
 
   return (
@@ -466,7 +469,7 @@ export function ChatWindow(): React.JSX.Element {
           {conv?.projectName && <Badge variant="ghost">{conv.projectName}</Badge>}
           {conv?.status === 'running' && (
             <Badge variant="brand" size="sm">
-              运行中
+              {tr('common.status.running')}
             </Badge>
           )}
         </div>
@@ -476,39 +479,41 @@ export function ChatWindow(): React.JSX.Element {
           <div className="flex items-center gap-0.5">
             <ToolbarButton
               onClick={toggleGroup}
-              title="群设置"
+              title={tr('chat.toolbar.group')}
               icon={<Users size={14} />}
-              label="群设置"
+              label={tr('chat.toolbar.group')}
               active={groupPanelOpen}
             />
-            <ToolbarButton
-              onClick={toggleTask}
-              title="任务面板"
-              icon={<ListTodo size={14} />}
-              label="任务"
-            />
-            <ToolbarButton
-              onClick={toggleGit}
-              title="工作区文件变更与提交历史"
-              icon={<Files size={14} />}
-              label="文件"
-              active={gitPanelOpen}
-            />
-            {activeDiff && (
+            {(pendingCount > 0 || activeDiff) && (
               <ToolbarButton
-                onClick={toggleDiff}
-                title="Diff 查看"
-                icon={<GitBranch size={14} />}
-                label="Diff"
-                active={activeDiff.status === 'pending'}
-                pulse={activeDiff.status === 'pending'}
+                onClick={() => setTab('review')}
+                title={tr('chat.toolbar.reviewTitle')}
+                icon={<FileDiff size={14} />}
+                label={tr('chat.toolbar.review')}
+                active={rightTab === 'review'}
+                pulse={pendingCount > 0 || activeDiff?.status === 'pending'}
               />
             )}
             <ToolbarButton
-              onClick={togglePreview}
-              title="预览"
+              onClick={() => setTab('task')}
+              title={tr('chat.toolbar.taskTitle')}
+              icon={<ListTodo size={14} />}
+              label={tr('chat.toolbar.task')}
+              active={rightTab === 'task'}
+            />
+            <ToolbarButton
+              onClick={() => setTab('git')}
+              title={tr('chat.toolbar.filesTitle')}
+              icon={<Files size={14} />}
+              label={tr('chat.toolbar.files')}
+              active={rightTab === 'git'}
+            />
+            <ToolbarButton
+              onClick={() => setTab('preview')}
+              title={tr('chat.toolbar.preview')}
               icon={<Monitor size={14} />}
-              label="预览"
+              label={tr('chat.toolbar.preview')}
+              active={rightTab === 'preview'}
               pulse={!!previewUrl}
             />
           </div>

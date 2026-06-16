@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Brain, ChevronRight, Loader2 } from 'lucide-react'
 import type { Message } from '../../types'
 import { Avatar } from '../ui/Avatar'
+import { useT } from '../../i18n'
 
 function formatDuration(ms?: number): string {
   if (!ms || ms <= 0) return ''
@@ -13,10 +14,18 @@ function formatDuration(ms?: number): string {
 /** 思考过程卡片（对标 Codex）：流式时实时展开，完成后自动折叠为一行摘要。
  *  用户手动开合的状态优先于自动行为。 */
 export function ThinkingCard({ msg }: { msg: Message }): React.JSX.Element {
+  const tr = useT()
   const streaming = !!msg.streaming
-  const [open, setOpen] = useState(false)
-  const userToggled = useRef(false)
+  const [expanded, setExpanded] = useState(streaming)
+  const [userToggled, setUserToggled] = useState(false)
+  const [prevStreaming, setPrevStreaming] = useState(streaming)
   const bodyRef = useRef<HTMLDivElement>(null)
+
+  // 未被用户手动开合过则跟随流式：思考中展开、完成自动收起（渲染期同步复位）
+  if (streaming !== prevStreaming) {
+    setPrevStreaming(streaming)
+    if (!userToggled) setExpanded(streaming)
+  }
 
   // 流式输出时内容区自动跟随到底部
   useEffect(() => {
@@ -25,12 +34,6 @@ export function ThinkingCard({ msg }: { msg: Message }): React.JSX.Element {
     }
   }, [msg.content, streaming])
 
-  // 思考完成：未被用户手动操作过则自动收起
-  useEffect(() => {
-    if (!streaming && !userToggled.current) setOpen(false)
-  }, [streaming])
-
-  const expanded = streaming || open
   const duration = formatDuration(msg.meta?.thinkingMs)
 
   return (
@@ -46,8 +49,8 @@ export function ThinkingCard({ msg }: { msg: Message }): React.JSX.Element {
         >
           <button
             onClick={() => {
-              userToggled.current = true
-              setOpen(!expanded)
+              setUserToggled(true)
+              setExpanded(!expanded)
             }}
             className="flex items-center gap-2 w-full px-3 py-1.5 border-none bg-transparent cursor-pointer hover-spotlight"
           >
@@ -61,7 +64,11 @@ export function ThinkingCard({ msg }: { msg: Message }): React.JSX.Element {
             />
             <Brain size={13} className="shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
             <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-              {streaming ? '正在思考…' : duration ? `已思考 ${duration}` : '已思考'}
+              {streaming
+                ? tr('chat.thinking.thinking')
+                : duration
+                  ? tr('chat.thinking.thoughtFor', { duration })
+                  : tr('chat.thinking.thought')}
             </span>
             {streaming && (
               <Loader2

@@ -142,6 +142,41 @@ async def delete_messages_from(
     return len(doomed)
 
 
+async def get_latest_agent_meta(session: AsyncSession, task_id: str) -> dict:
+    """取某任务最新一条 agent 消息的 meta（无则空 dict）。
+
+    供编排器读取 Reviewer 写入的 meta["reviewVerdict"]，驱动 evaluator-optimizer 回环。
+    """
+    stmt = (
+        select(Message.meta)
+        .where(Message.task_id == task_id, Message.type == "agent")
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    row = (await session.execute(stmt)).first()
+    return dict(row[0]) if row and row[0] else {}
+
+
+async def get_latest_user_attachments(
+    session: AsyncSession, conversation_id: str
+) -> list[dict]:
+    """取最近一条 user 消息 meta.attachments（统一附件 ref 列表）；无则空。
+
+    多模态：context_builder 据此把当轮用户图片注入各任务 AdapterContext。replan/review
+    阶段不新增 user 消息，故"最近 user 消息"始终是触发本轮的原始消息，天然覆盖回环。
+    """
+    stmt = (
+        select(Message.meta)
+        .where(Message.conversation_id == conversation_id, Message.type == "user")
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    row = (await session.execute(stmt)).first()
+    meta = dict(row[0]) if row and row[0] else {}
+    atts = meta.get("attachments")
+    return atts if isinstance(atts, list) else []
+
+
 async def list_messages(
     session: AsyncSession,
     conversation_id: str,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 # 决策 JSON 解析失败重试次数（LLM 偶发格式坏，重试比直接降级单步更稳）
 _DECISION_MAX_ATTEMPTS = 2
+
+# #10 fan-out 封顶：单任务最多并行方案数（成本护栏，防 N 倍 LLM 调用爆炸）
+_FAN_OUT_CAP = max(1, int(os.environ.get("AGENTHUB_FAN_OUT_CAP") or "3"))
 
 
 async def _execute_decision(adapter, ctx) -> str:
@@ -66,6 +70,7 @@ async def _get_agent_specs(member_ids: list[str] | None = None) -> list[AgentSpe
                     name=r.name or "",
                     description=r.description or "",
                     skills=r.skills or "",
+                    skill_specs=r.skill_specs or [],
                     capabilities=r.capabilities or {},
                     system_prompt=r.system_prompt or "",
                 )
@@ -76,8 +81,13 @@ async def _get_agent_specs(member_ids: list[str] | None = None) -> list[AgentSpe
         return []
 
 
-async def _get_orchestrator_adapter_pref() -> str:
-    """读取 Orchestrator 在 DB 中指定的适配器偏好（未指定返回空串）。"""
+async def _get_orchestrator_routing() -> tuple[str, dict[str, str], str]:
+    """读取 Orchestrator 的 adapter 偏好 + provider 配置 + model（规划复用其凭证）。
+
+    规划调用须带 orchestrator 的 provider_config（base_url/auth_token）与 model：缺 provider
+    时，配了第三方 base_url 的 codex/claude 规划会回退本地登录态而失败 → fallback single，
+    多步需求被误降为单任务（实测 codex 多 agent 协作失效的根因）。
+    """
     try:
         from sqlalchemy import select
         from app.db.engine import get_session_factory
@@ -85,12 +95,24 @@ async def _get_orchestrator_adapter_pref() -> str:
         factory = get_session_factory()
         async with factory() as session:
             result = await session.execute(
-                select(AgentRecord.adapter_type).where(AgentRecord.role == "orchestrator")
+                select(
+                    AgentRecord.adapter_type,
+                    AgentRecord.provider_config,
+                    AgentRecord.model,
+                ).where(AgentRecord.role == "orchestrator")
             )
             row = result.first()
-            return (row[0] or "") if row else ""
+            if not row:
+                return "", {}, ""
+            raw_provider = row[1] or {}
+            provider = {
+                k: v.strip()
+                for k, v in raw_provider.items()
+                if isinstance(v, str) and v.strip()
+            }
+            return (row[0] or ""), provider, (row[2] or "")
     except Exception:
-        return ""
+        return "", {}, ""
 
 
 @dataclass
@@ -100,6 +122,8 @@ class PlannedTask:
     title: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
+    # #10 >1 时该任务派 N 个 cross-model attempt 并行出方案（只读），裁决择优后单点落地
+    fan_out: int = 1
 
 
 @dataclass
@@ -153,6 +177,12 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
         deps = item.get("dependsOn") or []
         if not isinstance(deps, list):
             return None
+        raw_fan = item.get("fanOut", 1)
+        fan_out = (
+            max(1, min(_FAN_OUT_CAP, int(raw_fan)))
+            if isinstance(raw_fan, (int, float)) and not isinstance(raw_fan, bool)
+            else 1
+        )
         tasks.append(
             PlannedTask(
                 id=tid,
@@ -161,6 +191,7 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
                 depends_on=[str(d) for d in deps],
                 requires_approval=bool(item.get("requiresApproval", False))
                 or agent == "deployer",  # 部署强制审批
+                fan_out=fan_out,
             )
         )
         seen_ids.add(tid)
@@ -263,6 +294,21 @@ def _fallback_decision(instructions: str, valid_agents: set[str] | None = None) 
     return Decision(mode="single", plan=plan)
 
 
+def compose_replan_instructions(original: str, failed: list[tuple[str, str]]) -> str:
+    """把失败任务清单作为局部重规划上下文喂回 decide()（orchestrator-workers 动态分解）。
+
+    只针对失败点请求修复 / 替代方案，避免重复已成功的工作（对齐详细 delegation）。
+    """
+    lines = "\n".join(
+        f"- {title}：{(reason or '失败原因未知')[:300]}" for title, reason in failed
+    )
+    return (
+        f"{original}\n\n"
+        "## 上一轮以下任务失败，请给出修复或替代方案（只针对失败点，不要重复已成功的工作）\n"
+        f"{lines}"
+    )
+
+
 async def decide(
     instructions: str,
     *,
@@ -293,7 +339,7 @@ async def decide(
 
         # Orchestrator 在 DB 指定了适配器偏好时优先使用，其余按规划优先级探测
         # （claude-code -> codex；排除 mock：mock 假文本必然解析失败，直接走规则回退）
-        pref = await _get_orchestrator_adapter_pref()
+        pref, pref_provider, pref_model = await _get_orchestrator_routing()
         candidates = ([pref] if pref else []) + [n for n in PLANNING_PRIORITY if n != pref]
 
         for adapter_name in candidates:
@@ -314,11 +360,17 @@ async def decide(
                 project_context=project_context or "（无）",
                 intensity_hint=intensity_hint(collab_intensity),
             )
+            # 规划复用 orchestrator 凭证：用其偏好 adapter 时注入 provider/model，否则配了
+            # 第三方 base_url 的 codex/claude 规划缺凭证回退本地登录态而失败 → fallback single
+            use_pref = adapter_name == pref
             ctx = AdapterContext(
                 instructions=decision_prompt,
                 workspace_path=".",
                 approval_mode=UnifiedApprovalMode.AUTO,
                 sandbox_level=UnifiedSandboxLevel.READ_ONLY,
+                # #6 规划走轻模型；未配置回退 orchestrator.model（保证第三方有权 model）
+                model=adapter.light_model or (pref_model if use_pref else None),
+                provider=(pref_provider if use_pref else None) or None,
             )
             # JSON 解析失败重试：LLM 偶发格式坏，同一适配器重试比直接降级单步更稳
             for attempt in range(_DECISION_MAX_ATTEMPTS):

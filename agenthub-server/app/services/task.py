@@ -81,6 +81,24 @@ async def create_tasks(
     return [_to_out(t) for t in records]
 
 
+async def resolve_dependencies(session: AsyncSession, id_map: dict[str, str]) -> None:
+    """把已创建任务里以「计划内本地 id」(如 t1/fix) 存储的 depends_on 翻译成真实 DB 任务 id。
+
+    create_tasks 时只能先落库再由 zip 得到 planner->db 的 id_map，故 depends_on 初始存的是
+    planner 本地 id，与 task.id(uuid) 不匹配，前端据此无法连边渲染 DAG。本函数在 id_map 就绪后
+    回填为 db id（丢弃无法映射的悬挂依赖），不影响调度（execute_plan 用内存 plan 的 depends_on）。
+    """
+    for db_id in id_map.values():
+        task = await session.get(Task, db_id)
+        if task is None:
+            continue
+        current = list(task.depends_on or [])
+        translated = [id_map[d] for d in current if d in id_map]
+        if translated != current:
+            task.depends_on = translated
+    await session.flush()
+
+
 async def list_tasks(session: AsyncSession, conversation_id: str) -> list[TaskOut]:
     stmt = (
         select(Task)

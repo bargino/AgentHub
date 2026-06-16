@@ -17,6 +17,49 @@ from app.adapters.base import UnifiedEvent
 ADAPTER_NAME = "claude-code"
 
 
+def _line_count(text: str) -> int:
+    """文本行数（末尾无换行也算一行）。"""
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
+def _tool_use_to_diff(tool_name: str, tool_input: Any) -> UnifiedEvent | None:
+    """Write/Edit 工具写入 -> diff_update（供前端代码变更面板展示）。
+
+    claude SDK 不提供 turn 级 diff（不同于 codex 的 turn/diff/updated），故从工具入参
+    提取变更：Write 为新建/覆盖（全量 content），Edit 为片段替换（old/new_string）。
+    MultiEdit 等其它工具暂不转（需多段或全文，留待 git diff 方案）。
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    path = tool_input.get("file_path") or tool_input.get("path")
+    if not path:
+        return None
+    if tool_name == "Write":
+        old, new = "", str(tool_input.get("content", ""))
+    elif tool_name == "Edit":
+        old, new = str(tool_input.get("old_string", "")), str(tool_input.get("new_string", ""))
+    else:
+        return None
+    return UnifiedEvent(
+        type="diff_update",
+        data={
+            "summary": f"{tool_name} {path}",
+            "files": [
+                {
+                    "filename": str(path),
+                    "additions": _line_count(new),
+                    "deletions": _line_count(old),
+                    "oldContent": old,
+                    "newContent": new,
+                }
+            ],
+        },
+        adapter=ADAPTER_NAME,
+    )
+
+
 def convert_message(message: Any) -> list[UnifiedEvent]:
     events: list[UnifiedEvent] = []
 
@@ -51,6 +94,10 @@ def convert_message(message: Any) -> list[UnifiedEvent]:
                         adapter=ADAPTER_NAME,
                     )
                 )
+                # claude SDK 无 turn 级 diff，Write/Edit 额外转 diff_update 供变更面板展示
+                diff_evt = _tool_use_to_diff(block.name, block.input)
+                if diff_evt is not None:
+                    events.append(diff_evt)
             elif isinstance(block, ToolResultBlock):
                 events.append(
                     UnifiedEvent(

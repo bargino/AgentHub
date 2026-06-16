@@ -1,11 +1,8 @@
-const DEFAULT_BASE_URL = 'http://127.0.0.1:8642'
-const API_PREFIX = '/api/v1'
+// 所有 REST 调用改走主进程 stdio 桥（window.bridge.request），不再发起网络 fetch。
+// 路径与方法保持与原 FastAPI 路由一致，由桥进程内 ASGI 派发。
+import { t } from '../i18n'
 
-// baseUrl 末尾斜杠会导致拼接出双斜杠，统一去除
-export function getServerBaseUrl(): string {
-  const stored = localStorage.getItem('agenthub.serverUrl')
-  return (stored ?? DEFAULT_BASE_URL).replace(/\/+$/, '')
-}
+const API_PREFIX = '/api/v1'
 
 export class HttpError extends Error {
   readonly status: number
@@ -19,19 +16,18 @@ export class HttpError extends Error {
   }
 }
 
-async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
-  const url = `${getServerBaseUrl()}${API_PREFIX}${path}`
-  const res = await fetch(url, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined
-  })
+type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
-  const text = await res.text()
-  if (!res.ok) throw new HttpError(res.status, text)
-
-  // 后端对部分写操作可能返回空响应体
-  return (text ? JSON.parse(text) : undefined) as T
+async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+  if (!window.bridge) {
+    throw new HttpError(0, t('errors.bridgeUnavailable'))
+  }
+  const res = await window.bridge.request({ method, path: `${API_PREFIX}${path}`, body })
+  if (res.status < 200 || res.status >= 300) {
+    const text = typeof res.body === 'string' ? res.body : JSON.stringify(res.body)
+    throw new HttpError(res.status, text)
+  }
+  return res.body as T
 }
 
 export function getJson<T>(path: string): Promise<T> {
@@ -40,4 +36,12 @@ export function getJson<T>(path: string): Promise<T> {
 
 export function postJson<T>(path: string, body?: unknown): Promise<T> {
   return request<T>('POST', path, body)
+}
+
+export function patchJson<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>('PATCH', path, body)
+}
+
+export function deleteJson<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>('DELETE', path, body)
 }

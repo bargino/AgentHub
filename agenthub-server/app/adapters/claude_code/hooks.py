@@ -41,6 +41,44 @@ def _deny(input_data: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _diff_from_pairs(pairs: list[tuple[str, str]]) -> tuple[str, int, int]:
+    """(old, new) 文本对 -> 极简 unified diff 体（-旧 / +新）+ (additions, deletions)。
+    与 diff_service.build_files_from_changes 同口径：只需 +/- 行即可重建预览。"""
+    body: list[str] = []
+    additions = deletions = 0
+    for old, new in pairs:
+        old_lines = old.splitlines() if old else []
+        new_lines = new.splitlines() if new else []
+        body.extend(f"-{line}" for line in old_lines)
+        body.extend(f"+{line}" for line in new_lines)
+        additions += len(new_lines)
+        deletions += len(old_lines)
+    return "\n".join(body), additions, deletions
+
+
+def _changes_from_tool_input(tool_name: str, tool_input: dict[str, Any]) -> list[dict[str, Any]]:
+    """Claude 文件写工具 tool_input -> 审批可视 diff 的 changes 结构
+    （[{path, diff, additions, deletions}]，对齐 codex fileChange 审批契约，
+    使审查界面对 Claude 文件改动同样「审批即看 diff」）。"""
+    path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    if tool_name == "MultiEdit":
+        pairs = [
+            (str(e.get("old_string", "")), str(e.get("new_string", "")))
+            for e in (tool_input.get("edits") or [])
+            if isinstance(e, dict)
+        ]
+    elif tool_name == "Write":
+        pairs = [("", str(tool_input.get("content", "")))]
+    elif tool_name == "NotebookEdit":
+        pairs = [("", str(tool_input.get("new_source", "")))]
+    else:  # Edit
+        pairs = [(str(tool_input.get("old_string", "")), str(tool_input.get("new_string", "")))]
+    diff_text, additions, deletions = _diff_from_pairs(pairs)
+    if not path and not diff_text:
+        return []
+    return [{"path": path, "diff": diff_text, "additions": additions, "deletions": deletions}]
+
+
 def build_hooks(
     approval_mode: UnifiedApprovalMode,
     on_event: Callable[[UnifiedEvent], Any],
@@ -69,13 +107,31 @@ def build_hooks(
         event = asyncio.Event()
         pending_approvals[request_id] = event
 
+        # 统一审批契约：文件写工具标 apply_diff 并附 changes（审查界面据此渲染内联
+        # diff），命令标 run_command；不再让 executor 回退默认 run_command 而丢 diff。
+        is_file_write = tool_name in FILE_WRITE_TOOLS
+        if is_file_write:
+            action_type = "apply_diff"
+            changes = _changes_from_tool_input(tool_name, tool_input)
+            file_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+            summary = f"应用代码变更：{file_path}" if file_path else "应用代码变更"
+        else:
+            action_type = "run_command"
+            changes = []
+            file_path = ""
+            command = str(tool_input.get("command", ""))
+            summary = f"运行命令：{command}" if command else "运行命令"
+
         on_event(
             UnifiedEvent(
                 type="approval_request",
                 data={
                     "request_id": request_id,
                     "tool": tool_name,
-                    "file_path": tool_input.get("file_path", ""),
+                    "action_type": action_type,
+                    "changes": changes,
+                    "summary": summary,
+                    "file_path": file_path,
                     "tool_input": tool_input,
                     "reason": reason,
                 },

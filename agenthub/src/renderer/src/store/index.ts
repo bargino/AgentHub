@@ -1,10 +1,33 @@
 import { create } from 'zustand'
-import type { Conversation, Message, Task, DiffRecord, Approval, Agent, AgentRole } from '../types'
+import type {
+  Conversation,
+  Message,
+  Task,
+  DiffRecord,
+  Approval,
+  Agent,
+  AgentRole,
+  RightTab
+} from '../types'
 import * as api from '../services/api'
 import { formatTime } from '../services/api'
-import { wsClient, type WsServerFrame, type WsStatus } from '../services/websocket'
+import {
+  wsClient,
+  type MsgAttachment,
+  type WsServerFrame,
+  type WsStatus
+} from '../services/websocket'
+import { notify, notifyEvent } from '../services/notify'
+import { t } from '../i18n'
 
-export type PageType = 'chat' | 'agents' | 'settings'
+const APPROVAL_ACTION_KEYS: Record<string, string> = {
+  apply_diff: 'approval.action.apply_diff',
+  run_command: 'approval.action.run_command',
+  install_dependency: 'approval.action.install_dependency',
+  deploy: 'approval.action.deploy'
+}
+
+export type PageType = 'chat' | 'agents' | 'manage' | 'settings'
 
 interface AppState {
   activePage: PageType
@@ -14,24 +37,26 @@ interface AppState {
   tasks: Record<string, Task[]>
   agents: Agent[]
   activeDiff: DiffRecord | null
-  /** 会话内全部待决审批（按创建时间升序），支持多 Agent 并发逐题确认 */
+  /** diff 缓存（id -> DiffRecord）：审查界面按 approval.diffId 联动展示，避免单实例被覆盖 */
+  diffsById: Record<string, DiffRecord>
+  /** 会话内全部待决审批（按创建时间升序），支持多 Agent 并发审查 */
   pendingApprovals: Approval[]
-  /** 暂存的逐题决策（approvalId -> 决策）：向导式先暂存，按 Agent 分组提交 */
-  approvalDecisions: Record<string, 'approved' | 'rejected'>
   previewUrl: string | null
   draftMessage: string | null
   /** 引用回复目标（发送时拼为 Markdown 引用块前缀） */
   replyingTo: Message | null
-  taskPanelOpen: boolean
-  diffPanelOpen: boolean
-  previewPanelOpen: boolean
+  /** 右侧停靠区当前 tab（单实例 + tab 切换，消除横向挤压）；null = 收起 */
+  rightTab: RightTab | null
   groupPanelOpen: boolean
-  gitPanelOpen: boolean
   /** 新建项目弹窗（会话列表 + 聊天空态引导卡共用） */
   newProjectOpen: boolean
   /** 当前会话上下文用量（执行一轮结束后刷新） */
   contextUsage: api.ContextUsage | null
+  /** 瞬时错误（SDK 重试中）：输入框上方悬浮提示，恢复出新内容/收尾时自清 */
+  transientError: { cid: string; reason: string } | null
   wsStatus: WsStatus
+  /** 后端桥最近一次结构化失败原因（python 解析失败 / 超重启上限等） */
+  bridgeError: string | null
 
   /** 是否可能还有更早的历史消息（按上次拉取是否满页推断） */
   hasMoreHistory: Record<string, boolean>
@@ -41,16 +66,18 @@ interface AppState {
   loadAgents: () => Promise<void>
   setActiveConversation: (id: string) => Promise<void>
   loadOlderMessages: () => Promise<void>
-  sendMessage: (content: string) => Promise<void>
+  sendMessage: (content: string, attachments?: MsgAttachment[]) => Promise<void>
   stopGeneration: () => Promise<void>
   rollbackTo: (messageId: string) => Promise<void>
   refreshContextUsage: () => Promise<void>
   approveDiff: () => Promise<void>
   rejectDiff: () => Promise<void>
-  /** 暂存某条审批的决策（不发网络，向导式逐题选择，可回退修改） */
-  setApprovalDecision: (approvalId: string, decision: 'approved' | 'rejected') => void
-  /** 提交某个 Agent 分组的全部决策（各 Agent 独立提交，互不等待） */
-  submitApprovalGroup: (agentKey: string) => Promise<void>
+  /** 按 id 确保 diff 已在缓存（审查界面联动 apply_diff 审批的关联 diff） */
+  ensureDiff: (diffId: string) => Promise<void>
+  /** 决策单条审批：直接 resolve（释放 agent 阻塞 + 级联 diff 状态），乐观移除 */
+  decideApproval: (approvalId: string, decision: 'approved' | 'rejected') => Promise<void>
+  /** 批量决策多条审批（P3 批量通过/拒绝） */
+  decideApprovals: (approvalIds: string[], decision: 'approved' | 'rejected') => Promise<void>
   createConversation: (
     title: string,
     projectName: string,
@@ -68,14 +95,13 @@ interface AppState {
       settings?: Record<string, unknown>
     }
   ) => Promise<void>
+  deleteConversation: (id: string) => Promise<void>
   setReplyingTo: (msg: Message | null) => void
   setNewProjectOpen: (open: boolean) => void
   setActivePage: (page: PageType) => void
-  toggleTaskPanel: () => void
-  toggleDiffPanel: () => void
-  togglePreviewPanel: () => void
+  /** 切换右侧 tab：传入当前 tab 则收起（toggle 语义）；切 tab 自动收起群设置 */
+  setRightTab: (tab: RightTab | null) => void
   toggleGroupPanel: () => void
-  toggleGitPanel: () => void
 }
 
 /** 解析会话的有效群成员（memberAgentIds 空 = 全员 enabled Agent） */
@@ -96,18 +122,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   tasks: {},
   agents: [],
   activeDiff: null,
+  diffsById: {},
   pendingApprovals: [],
-  approvalDecisions: {},
   previewUrl: null,
   draftMessage: null,
+  bridgeError: null,
   replyingTo: null,
-  taskPanelOpen: false,
-  diffPanelOpen: false,
-  previewPanelOpen: false,
+  rightTab: null,
   groupPanelOpen: false,
-  gitPanelOpen: false,
   newProjectOpen: false,
   contextUsage: null,
+  transientError: null,
   wsStatus: 'disconnected',
   hasMoreHistory: {},
   loadingHistory: false,
@@ -127,26 +152,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       activeConversationId: id,
       activeDiff: null,
+      diffsById: {},
       pendingApprovals: [],
-      approvalDecisions: {},
       replyingTo: null,
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, unread: 0 } : c))
     }))
     wsClient.subscribe(id)
-    const [msgs, tasks, diff, approvals] = await Promise.all([
-      api.getMessages(id, { limit: 100 }),
-      api.getTasks(id),
-      api.getDiff(id),
-      api.getApprovals(id)
-    ])
-    set((s) => ({
-      messages: { ...s.messages, [id]: msgs },
-      tasks: { ...s.tasks, [id]: tasks },
-      activeDiff: diff,
-      pendingApprovals: approvals,
-      hasMoreHistory: { ...s.hasMoreHistory, [id]: msgs.length >= 100 }
-    }))
-    void get().refreshContextUsage()
+    await resyncConversation(id)
   },
 
   loadOlderMessages: async () => {
@@ -169,7 +181,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  sendMessage: async (content) => {
+  sendMessage: async (content, attachments) => {
     const { activeConversationId, agents, conversations } = get()
     if (!activeConversationId) return
 
@@ -179,22 +191,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const match = content.match(/@([\w-]+)/)
     const targetAgent = match && knownRoles.has(match[1]) ? (match[1] as AgentRole) : undefined
 
-    // 乐观插入用户消息，临时 id 待 message.created 事件替换
+    // 乐观插入用户消息，临时 id 待 message.completed 事件替换；附件用 data URL 展示缩略图
     appendMessage(activeConversationId, {
       id: `temp_${Date.now()}`,
       conversationId: activeConversationId,
       type: 'user',
       content,
       timestamp: now(),
-      rawTimestamp: new Date().toISOString()
+      rawTimestamp: new Date().toISOString(),
+      ...(attachments && attachments.length ? { attachments } : {})
     })
 
-    const ok = wsClient.sendMessage(activeConversationId, content, targetAgent)
-    if (!ok)
-      appendErrorMessage(
-        activeConversationId,
-        'WebSocket 未连接，消息发送失败，请确认 AgentHub Server 已启动'
-      )
+    const result = await wsClient.sendMessage(
+      activeConversationId,
+      content,
+      targetAgent,
+      attachments
+    )
+    if (!result.ok) {
+      appendErrorMessage(activeConversationId, result.reason)
+      notify.error(t('store.sendFailed'), result.reason)
+    }
   },
 
   stopGeneration: async () => {
@@ -203,7 +220,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await api.stopConversation(activeConversationId)
     } catch {
-      appendErrorMessage(activeConversationId, '停止失败，请确认 AgentHub Server 已启动')
+      appendErrorMessage(activeConversationId, t('store.stopFailed'))
     }
   },
 
@@ -225,7 +242,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         replyingTo: null
       }))
     } catch {
-      appendErrorMessage(cid, '回退失败，请确认 AgentHub Server 已启动')
+      appendErrorMessage(cid, t('store.rollbackFailed'))
     }
   },
 
@@ -247,47 +264,50 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { activeDiff } = get()
     if (!activeDiff) return
     const diff = await api.approveDiff(activeDiff.id)
-    set({ activeDiff: diff })
+    set((s) => ({ activeDiff: diff, diffsById: { ...s.diffsById, [diff.id]: diff } }))
   },
 
   rejectDiff: async () => {
     const { activeDiff } = get()
     if (!activeDiff) return
     const diff = await api.rejectDiff(activeDiff.id)
-    set({ activeDiff: diff })
+    set((s) => ({ activeDiff: diff, diffsById: { ...s.diffsById, [diff.id]: diff } }))
   },
 
-  setApprovalDecision: (approvalId, decision) => {
-    set((s) => ({ approvalDecisions: { ...s.approvalDecisions, [approvalId]: decision } }))
+  ensureDiff: async (diffId) => {
+    if (!diffId || get().diffsById[diffId]) return
+    try {
+      const diff = await api.getDiffById(diffId)
+      set((s) => ({ diffsById: { ...s.diffsById, [diff.id]: diff } }))
+    } catch {
+      /* 关联 diff 拉取失败：审查界面降级为仅摘要展示 */
+    }
   },
 
-  submitApprovalGroup: async (agentKey) => {
-    const { pendingApprovals, approvalDecisions, activeConversationId } = get()
-    const group = pendingApprovals.filter((a) => (a.agentRole ?? '__unknown__') === agentKey)
-    if (group.length === 0) return
+  decideApproval: async (approvalId, decision) => {
+    await get().decideApprovals([approvalId], decision)
+  },
+
+  decideApprovals: async (approvalIds, decision) => {
+    const { pendingApprovals, activeConversationId } = get()
+    const ids = approvalIds.filter((id) => pendingApprovals.some((a) => a.id === id))
+    if (ids.length === 0) return
     const submitted: string[] = []
     try {
       // 逐条 REST 决策：后端落库 + 回传适配器解除该任务阻塞，approval.resolved 事件回灌
-      for (const a of group) {
-        const decision = approvalDecisions[a.id]
-        if (!decision) continue
-        await api.resolveApproval(a.id, decision)
-        submitted.push(a.id)
+      for (const id of ids) {
+        await api.resolveApproval(id, decision)
+        submitted.push(id)
       }
     } catch {
       if (activeConversationId)
-        appendErrorMessage(activeConversationId, '审批提交失败，请确认 AgentHub Server 已启动')
+        appendErrorMessage(activeConversationId, t('store.approvalSubmitFailed'))
     }
     if (submitted.length > 0) {
       // 乐观移除已提交项（approval.resolved 事件亦会幂等清理）
-      set((s) => {
-        const nextDecisions = { ...s.approvalDecisions }
-        for (const id of submitted) delete nextDecisions[id]
-        return {
-          pendingApprovals: s.pendingApprovals.filter((a) => !submitted.includes(a.id)),
-          approvalDecisions: nextDecisions
-        }
-      })
+      set((s) => ({
+        pendingApprovals: s.pendingApprovals.filter((a) => !submitted.includes(a.id))
+      }))
     }
   },
 
@@ -318,18 +338,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
+  deleteConversation: async (id) => {
+    await api.deleteConversation(id)
+    set((s) => {
+      const conversations = s.conversations.filter((c) => c.id !== id)
+      const messages = { ...s.messages }
+      delete messages[id]
+      return {
+        conversations,
+        messages,
+        activeConversationId:
+          s.activeConversationId === id ? (conversations[0]?.id ?? null) : s.activeConversationId,
+        groupPanelOpen: false
+      }
+    })
+  },
+
   setReplyingTo: (msg) => set({ replyingTo: msg }),
   setNewProjectOpen: (open) => set({ newProjectOpen: open }),
   setActivePage: (page) => set({ activePage: page }),
-  // 任务 / 群设置 / 文件三个右侧面板同侧互斥
-  toggleTaskPanel: () =>
-    set((s) => ({ taskPanelOpen: !s.taskPanelOpen, groupPanelOpen: false, gitPanelOpen: false })),
-  toggleDiffPanel: () => set((s) => ({ diffPanelOpen: !s.diffPanelOpen })),
-  togglePreviewPanel: () => set((s) => ({ previewPanelOpen: !s.previewPanelOpen })),
-  toggleGroupPanel: () =>
-    set((s) => ({ groupPanelOpen: !s.groupPanelOpen, taskPanelOpen: false, gitPanelOpen: false })),
-  toggleGitPanel: () =>
-    set((s) => ({ gitPanelOpen: !s.gitPanelOpen, taskPanelOpen: false, groupPanelOpen: false }))
+  // 右侧停靠区单实例：切 tab（再次点击当前 tab 收起），并互斥关闭群设置
+  setRightTab: (tab) =>
+    set((s) => ({ rightTab: s.rightTab === tab ? null : tab, groupPanelOpen: false })),
+  toggleGroupPanel: () => set((s) => ({ groupPanelOpen: !s.groupPanelOpen, rightTab: null }))
 }))
 
 function appendMessage(conversationId: string, msg: Message): void {
@@ -337,6 +368,38 @@ function appendMessage(conversationId: string, msg: Message): void {
     const prev = s.messages[conversationId] ?? []
     return { messages: { ...s.messages, [conversationId]: [...prev, msg] } }
   })
+}
+
+// 会话全量重拉（REST 真相源）：用于打开会话与断线重连补帧。桥模式无 WS 事件重放，
+// 重连后用一次 REST 重拉对齐断连期间错过的消息/任务/diff/审批，避免界面停留在过期状态。
+async function resyncConversation(id: string): Promise<void> {
+  const store = useAppStore.getState()
+  try {
+    const [msgs, tasks, diff, approvals] = await Promise.all([
+      api.getMessages(id, { limit: 100 }),
+      api.getTasks(id),
+      api.getDiff(id),
+      api.getApprovals(id)
+    ])
+    useAppStore.setState((s) => ({
+      messages: { ...s.messages, [id]: msgs },
+      tasks: { ...s.tasks, [id]: tasks },
+      activeDiff: diff,
+      diffsById: diff ? { [diff.id]: diff } : {},
+      pendingApprovals: approvals,
+      hasMoreHistory: { ...s.hasMoreHistory, [id]: msgs.length >= 100 }
+    }))
+    // 补拉待决审批关联的 diff（历史会话重开时 getDiff 仅返回最新一条，无法覆盖全部）
+    for (const a of approvals) {
+      if (a.diffId) void store.ensureDiff(a.diffId)
+    }
+    void store.refreshContextUsage()
+  } catch (err) {
+    notify.error(
+      t('store.loadConvFailed'),
+      err instanceof Error ? err.message : t('errors.engineReady')
+    )
+  }
 }
 
 function appendErrorMessage(conversationId: string, content: string): void {
@@ -364,7 +427,8 @@ function replaceOptimisticOrUpsert(conversationId: string, msg: Message): void {
         const m = prev[i]
         if (m.id.startsWith('temp_') && m.type === 'user' && m.content === msg.content) {
           const next = [...prev]
-          next[i] = msg
+          // 保留乐观消息的图片附件（data URL）：后端消息不带可直接展示的 url
+          next[i] = { ...msg, attachments: msg.attachments ?? m.attachments }
           return { messages: { ...s.messages, [conversationId]: next } }
         }
       }
@@ -390,6 +454,8 @@ function handleWsEvent(frame: WsServerFrame): void {
     case 'message.completed': {
       if (!cid) return
       const m = (frame.data as { message: Message }).message
+      // 任务产出新内容 = 瞬时错误已恢复，自动清除悬浮提示（不污染上下文）
+      useAppStore.setState((s) => (s.transientError?.cid === cid ? { transientError: null } : s))
       // 用户消息：替换乐观插入的临时消息；其余按 id upsert（流式 delta 落库去重）
       replaceOptimisticOrUpsert(cid, {
         ...m,
@@ -410,6 +476,8 @@ function handleWsEvent(frame: WsServerFrame): void {
     case 'message.delta': {
       if (!cid) return
       const d = frame.data as DeltaData
+      // 流式恢复 = 瞬时错误已过，清除悬浮提示
+      useAppStore.setState((s) => (s.transientError?.cid === cid ? { transientError: null } : s))
       const msgType = d.kind === 'thinking' ? 'thinking' : 'agent'
       useAppStore.setState((s) => {
         const prev = s.messages[cid] ?? []
@@ -438,43 +506,80 @@ function handleWsEvent(frame: WsServerFrame): void {
       })
       return
     }
+    case 'agent.transient_error': {
+      if (!cid) return
+      const d = frame.data as { error?: string }
+      // 瞬时错误：仅悬浮提示，不入消息流/上下文；恢复出新内容或收尾时自清
+      useAppStore.setState({ transientError: { cid, reason: d.error || '' } })
+      return
+    }
     case 'diff.generated': {
       const diff = (frame.data as { diff: DiffRecord }).diff
       if (cid && cid === activeConversationId) {
-        useAppStore.setState({ activeDiff: diff, diffPanelOpen: true })
+        // 进审查 tab 并缓存（与 apply_diff 审批联动统一审查界面）
+        useAppStore.setState((s) => ({
+          activeDiff: diff,
+          diffsById: { ...s.diffsById, [diff.id]: diff },
+          rightTab: 'review',
+          groupPanelOpen: false
+        }))
       }
       return
     }
     case 'approval.required': {
       const approval = (frame.data as { approval: Approval }).approval
       if (cid && cid === activeConversationId) {
+        // 不再强抢右栏 tab（避免打断用户当前编辑/阅读）：仅入队待审批，靠审查 tab 的
+        // 角标计数 + 工具栏脉冲 + toast/桌面通知三重提示，由用户自行决定何时去审查。
         useAppStore.setState((s) =>
           s.pendingApprovals.some((a) => a.id === approval.id)
             ? s
             : { pendingApprovals: [...s.pendingApprovals, approval] }
         )
+        // apply_diff 审批：联动拉取关联 diff 供审查界面内联展示
+        if (approval.diffId) void useAppStore.getState().ensureDiff(approval.diffId)
       }
+      // 无论是否当前会话都提醒：切走窗口时补桌面通知，避免错过需确认的审批
+      const who = approval.agentName ?? approval.agentRole ?? 'Agent'
+      const action = APPROVAL_ACTION_KEYS[approval.actionType]
+        ? t(APPROVAL_ACTION_KEYS[approval.actionType])
+        : approval.actionType
+      notifyEvent(
+        'approval',
+        t('store.approvalNotifyTitle'),
+        t('store.approvalNotifyBody', { who, action, summary: approval.summary }),
+        'info'
+      )
       return
     }
     case 'approval.resolved': {
-      // data 可能是 {approval}（动作审批）或 {diff}（Diff 审批），分别处理
+      // data 可能是 {approval}（动作审批）和/或 {diff}（apply_diff 级联）：均幂等处理
       const data = frame.data as { approval?: Approval; diff?: DiffRecord }
-      const { activeDiff } = useAppStore.getState()
       if (data.approval) {
         const resolvedId = data.approval.id
-        useAppStore.setState((s) => {
-          if (!s.pendingApprovals.some((a) => a.id === resolvedId)) return s
-          const nextDecisions = { ...s.approvalDecisions }
-          delete nextDecisions[resolvedId]
-          return {
-            pendingApprovals: s.pendingApprovals.filter((a) => a.id !== resolvedId),
-            approvalDecisions: nextDecisions
-          }
-        })
+        useAppStore.setState((s) => ({
+          pendingApprovals: s.pendingApprovals.filter((a) => a.id !== resolvedId)
+        }))
       }
-      if (data.diff && activeDiff && activeDiff.id === data.diff.id) {
-        useAppStore.setState({ activeDiff: data.diff })
+      if (data.diff) {
+        const d = data.diff
+        useAppStore.setState((s) => ({
+          diffsById: { ...s.diffsById, [d.id]: d },
+          activeDiff: s.activeDiff && s.activeDiff.id === d.id ? d : s.activeDiff
+        }))
       }
+      return
+    }
+    case 'approval.resolve_failed': {
+      // 审批已落库但 adapter 无法解除（服务重启/超时）：明确告知用户，杜绝「以为通过了」
+      // 的静默分叉。关联任务的 failed 状态由随附的 task.status.changed 事件更新。
+      const d = frame.data as { reason?: string }
+      notifyEvent(
+        'approval',
+        t('store.approvalResolveFailedTitle'),
+        d.reason ?? t('store.approvalResolveFailedBody'),
+        'error'
+      )
       return
     }
     case 'conversation.updated': {
@@ -517,25 +622,35 @@ function handleWsEvent(frame: WsServerFrame): void {
     case 'task.status.changed': {
       const task = (frame.data as { task: Task }).task
       const tcid = task.conversationId
+      let justSucceeded = false
       useAppStore.setState((s) => {
         const prev = s.tasks[tcid] ?? []
         const idx = prev.findIndex((t) => t.id === task.id)
+        // 仅在 success 跳变时提醒一次（避免重复投递重复弹窗）
+        if (task.status === 'success' && prev[idx]?.status !== 'success') justSucceeded = true
         const next = idx >= 0 ? prev.map((t) => (t.id === task.id ? task : t)) : [...prev, task]
         return { tasks: { ...s.tasks, [tcid]: next } }
       })
+      if (justSucceeded) notifyEvent('taskDone', t('store.taskDone'), task.title, 'success')
       return
     }
     case 'preview.started': {
       const d = frame.data as { previewUrl: string }
       if (cid && cid === activeConversationId) {
-        useAppStore.setState({ previewUrl: d.previewUrl, previewPanelOpen: true })
+        useAppStore.setState({
+          previewUrl: d.previewUrl,
+          rightTab: 'preview',
+          groupPanelOpen: false
+        })
       }
       return
     }
     case 'error': {
       const d = frame.data as { error?: string; message?: string }
+      const msg = d.error ?? d.message ?? t('errors.unknown')
       const target = cid || activeConversationId
-      if (target) appendErrorMessage(target, d.error ?? d.message ?? '未知错误')
+      if (target) appendErrorMessage(target, msg)
+      notifyEvent('error', t('store.agentError'), msg, 'error')
       return
     }
     default:
@@ -550,17 +665,37 @@ function handleWsEvent(frame: WsServerFrame): void {
 wsClient.onStatusChange((status) => {
   useAppStore.setState({ wsStatus: status })
   if (status !== 'connected') return
+  // 连上即后端就绪：清除遗留的桥错误，拉取失败不再静默吞掉而是提示可重试
+  useAppStore.setState({ bridgeError: null })
   const store = useAppStore.getState()
-  store.loadAgents().catch(() => {})
+  store.loadAgents().catch((err) => {
+    notify.error(
+      t('store.loadAgentsFailed'),
+      err instanceof Error ? err.message : t('errors.retry')
+    )
+  })
   store
     .loadConversations()
     .then(() => {
       const s = useAppStore.getState()
       if (!s.activeConversationId && s.conversations[0]) {
         void s.setActiveConversation(s.conversations[0].id)
+      } else if (s.activeConversationId) {
+        // 断线重连补帧：当前会话仍打开时重拉一次，对齐断连期间错过的事件
+        void resyncConversation(s.activeConversationId)
       }
     })
-    .catch(() => {})
+    .catch((err) => {
+      notify.error(
+        t('store.loadConvListFailed'),
+        err instanceof Error ? err.message : t('errors.retry')
+      )
+    })
+})
+// 桥结构化错误（python 解析失败 / 超重启上限）：入 store 供 ConnectionBar 展示 + 全局 toast
+wsClient.onError((reason) => {
+  useAppStore.setState({ bridgeError: reason })
+  notify.error(t('store.engineError'), reason)
 })
 wsClient.onEvent(handleWsEvent)
 wsClient.connect()

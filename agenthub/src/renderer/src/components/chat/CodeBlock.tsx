@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { Copy, Check } from 'lucide-react'
+import { useT } from '../../i18n'
 
 /** shiki 按需懒加载（首个代码块出现时才拉取，避免拖慢启动） */
 let shikiPromise: Promise<typeof import('shiki')> | null = null
@@ -21,6 +22,7 @@ function extract(children: ReactNode): { code: string; lang: string } {
 /** Markdown 代码块：语言标签 + 复制按钮 + shiki 双主题高亮 + >5 行行号。
  *  流式渲染防跳动：先渲染纯文本 pre，高亮完成后水合替换（debounce 200ms）。 */
 export function CodeBlock({ children }: { children?: ReactNode }): React.JSX.Element {
+  const tr = useT()
   const { code, lang } = extract(children)
   const [highlighted, setHighlighted] = useState<{ code: string; html: string } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -63,12 +65,12 @@ export function CodeBlock({ children }: { children?: ReactNode }): React.JSX.Ele
         <span className="code-block-lang">{lang || 'text'}</span>
         <button
           onClick={copy}
-          title={copied ? '已复制' : '复制代码'}
+          title={copied ? tr('common.copied') : tr('chat.code.copyCode')}
           className="code-block-copy"
           style={{ color: copied ? 'var(--color-success)' : undefined }}
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
-          <span>{copied ? '已复制' : '复制'}</span>
+          <span>{copied ? tr('common.copied') : tr('common.copy')}</span>
         </button>
       </div>
       {html ? (

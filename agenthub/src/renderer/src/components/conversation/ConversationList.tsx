@@ -1,9 +1,11 @@
-import { Plus, Search, Pin, PinOff, Archive } from 'lucide-react'
+import { Plus, Search, Pin, PinOff, Archive, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useAppStore } from '../../store'
+import { useAppStore, resolveMembers } from '../../store'
+import { useT } from '../../i18n'
 import { formatSmartTime } from '../../services/api'
 import type { Conversation } from '../../types'
 import { CountBadge } from '../ui/Badge'
+import { GroupAvatar } from '../ui/GroupAvatar'
 import { StatusDot } from '../ui/StatusDot'
 import { NewProjectModal } from './NewProjectModal'
 
@@ -21,7 +23,9 @@ function ConvContextMenu({
   menu: MenuState
   onClose: () => void
 }): React.JSX.Element {
+  const tr = useT()
   const [confirmArchive, setConfirmArchive] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   useEffect(() => {
     const close = (): void => onClose()
@@ -57,6 +61,17 @@ function ConvContextMenu({
     onClose()
   }
 
+  // 永久删除（二次确认）：与归档不同，删除不可恢复（级联清理消息/任务/workspace）
+  const del = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      return
+    }
+    void useAppStore.getState().deleteConversation(menu.conv.id)
+    onClose()
+  }
+
   const itemCls =
     'flex items-center gap-2 w-full px-3 py-1.5 text-xs border-none bg-transparent cursor-pointer hover-spotlight text-left'
 
@@ -80,7 +95,7 @@ function ConvContextMenu({
         style={{ color: 'var(--color-text-primary)' }}
       >
         {menu.conv.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        {menu.conv.pinned ? '取消置顶' : '置顶会话'}
+        {menu.conv.pinned ? tr('conv.unpin') : tr('conv.pin')}
       </button>
       <button
         onClick={archive}
@@ -88,7 +103,11 @@ function ConvContextMenu({
         style={{ color: confirmArchive ? 'var(--color-error)' : 'var(--color-text-primary)' }}
       >
         <Archive size={13} />
-        {confirmArchive ? '再次点击确认归档' : '归档会话'}
+        {confirmArchive ? tr('conv.archiveConfirm') : tr('conv.archive')}
+      </button>
+      <button onClick={del} className={itemCls} style={{ color: 'var(--color-error)' }}>
+        <Trash2 size={13} />
+        {confirmDelete ? tr('conv.deleteConfirm') : tr('conv.delete')}
       </button>
     </div>
   )
@@ -100,25 +119,17 @@ const STATUS_MAP: Record<Conversation['status'], 'running' | 'idle' | 'offline'>
   idle: 'offline'
 }
 
-const AVATAR_GRADIENTS = [
-  'linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)',
-  'linear-gradient(135deg, #7c3aed 0%, #a855f7 100%)',
-  'linear-gradient(135deg, #0d9488 0%, #14b8a6 100%)',
-  'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-  'linear-gradient(135deg, #0891b2 0%, #0d9488 100%)'
-]
-
 function ConvItem({
   conv,
   active,
-  idx,
   onContextMenu
 }: {
   conv: Conversation
   active: boolean
-  idx: number
   onContextMenu: (e: React.MouseEvent, conv: Conversation) => void
 }): React.JSX.Element {
+  const agents = useAppStore((s) => s.agents)
+  const memberRoles = resolveMembers(conv, agents).map((a) => a.role)
   return (
     <div
       onClick={() => useAppStore.getState().setActiveConversation(conv.id)}
@@ -145,12 +156,7 @@ function ConvItem({
         />
       )}
       <div className="relative shrink-0">
-        <div
-          className="w-10 h-10 rounded-[var(--radius-lg)] flex items-center justify-center text-white text-xs font-semibold shadow-sm"
-          style={{ background: AVATAR_GRADIENTS[idx % AVATAR_GRADIENTS.length] }}
-        >
-          {conv.projectName.slice(0, 2).toUpperCase()}
-        </div>
+        <GroupAvatar roles={memberRoles} size={40} />
         <span
           className="absolute -bottom-0.5 -right-0.5 rounded-full p-[2px]"
           style={{ background: active ? 'var(--color-brand-bg)' : 'var(--color-bg-container)' }}
@@ -213,6 +219,7 @@ function ListSkeleton(): React.JSX.Element {
 }
 
 export function ConversationList(): React.JSX.Element {
+  const tr = useT()
   const conversations = useAppStore((s) => s.conversations)
   const activeId = useAppStore((s) => s.activeConversationId)
   const wsStatus = useAppStore((s) => s.wsStatus)
@@ -256,7 +263,7 @@ export function ConversationList(): React.JSX.Element {
       <div className="px-4 pt-4 pb-2">
         <div className="flex items-center justify-between mb-3">
           <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            会话
+            {tr('conv.title')}
           </span>
           <button
             onClick={() => useAppStore.getState().setNewProjectOpen(true)}
@@ -267,7 +274,7 @@ export function ConversationList(): React.JSX.Element {
               border: 'none',
               cursor: 'pointer'
             }}
-            title="新建项目"
+            title={tr('conv.newProject')}
           >
             <Plus size={15} />
           </button>
@@ -282,7 +289,7 @@ export function ConversationList(): React.JSX.Element {
           <input
             ref={searchRef}
             type="text"
-            placeholder="搜索会话"
+            placeholder={tr('conv.search')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-8 pr-12 py-2 text-xs rounded-[var(--radius-lg)] outline-none border border-transparent transition-all duration-150 bg-[var(--color-bg-spotlight)] focus:bg-[var(--color-bg-container)] focus:border-[var(--color-brand)] focus:shadow-[0_0_0_3px_var(--color-brand-bg)]"
@@ -302,16 +309,15 @@ export function ConversationList(): React.JSX.Element {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pt-1 pb-2">
+      <div className="flex-1 overflow-y-auto smooth-scroll pt-1 pb-2">
         {loading ? (
           <ListSkeleton />
         ) : (
-          filtered.map((c, i) => (
+          filtered.map((c) => (
             <ConvItem
               key={c.id}
               conv={c}
               active={c.id === activeId}
-              idx={i}
               onContextMenu={handleContextMenu}
             />
           ))

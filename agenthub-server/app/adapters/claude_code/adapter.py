@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import logging
+import shutil
 from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
@@ -19,6 +20,7 @@ from app.adapters.base import (
     UnifiedApprovalMode,
     UnifiedEvent,
 )
+from app.adapters.attachments import to_claude_blocks
 from app.adapters.claude_code.hooks import build_hooks
 from app.adapters.claude_code.message_converter import convert_message
 from app.config import LocalMCPConfig, load_mcp_servers
@@ -48,10 +50,11 @@ class ClaudeCodeAdapter(ICodeAdapter):
     async def health_check(self) -> bool:
         try:
             import claude_agent_sdk  # noqa: F401
-
-            return True
         except ImportError:
             return False
+        # claude_agent_sdk 底层调用外部 claude CLI（npm @anthropic-ai/claude-code）；
+        # 仅 import SDK 不代表 CLI 可用，需检测 claude 可执行文件在 PATH（防虚假 available）
+        return shutil.which("claude") is not None
 
     def get_version(self) -> str | None:
         try:
@@ -140,7 +143,21 @@ class ClaudeCodeAdapter(ICodeAdapter):
         try:
             async with ClaudeSDKClient(options=options) as client:
                 self._client = client
-                await client.query(ctx.instructions)
+                # 多模态：有图片附件时以结构化 user 消息（text + image content blocks）入参，
+                # 否则保持纯文本字符串（行为与改动前一致）
+                image_blocks = to_claude_blocks(ctx.attachments)
+                if image_blocks:
+                    content_blocks = [{"type": "text", "text": ctx.instructions}, *image_blocks]
+
+                    async def _attachment_stream() -> AsyncIterator[dict[str, Any]]:
+                        yield {
+                            "type": "user",
+                            "message": {"role": "user", "content": content_blocks},
+                        }
+
+                    await client.query(_attachment_stream())
+                else:
+                    await client.query(ctx.instructions)
 
                 async for message in client.receive_response():
                     if isinstance(message, SystemMessage):

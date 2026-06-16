@@ -86,6 +86,7 @@ _SQLITE_COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("provider_config", "JSON NOT NULL DEFAULT '{}'"),
         ("system_prompt", "TEXT NOT NULL DEFAULT ''"),
         ("context_window", "INTEGER"),
+        ("skill_specs", "JSON NOT NULL DEFAULT '[]'"),
     ],
     "messages": [
         ("meta", "JSON NOT NULL DEFAULT '{}'"),
@@ -93,6 +94,8 @@ _SQLITE_COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
     "approvals": [
         ("agent_role", "VARCHAR(32)"),
         ("agent_name", "VARCHAR(64)"),
+        ("adapter_name", "VARCHAR(32)"),
+        ("diff_id", "VARCHAR(32)"),
     ],
 }
 

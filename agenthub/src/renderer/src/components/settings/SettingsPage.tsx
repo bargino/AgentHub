@@ -1,6 +1,10 @@
 import { useState } from 'react'
-import { Server, Bell, Palette, ChevronRight, Check } from 'lucide-react'
+import { Cpu, Bell, Palette, RefreshCw, Loader2 } from 'lucide-react'
+import { useAppStore } from '../../store'
 import { wsClient } from '../../services/websocket'
+import { ensureDesktopPermission } from '../../services/notify'
+import { StatusDot } from '../ui/StatusDot'
+import { useT, useLang, setLang, LANGS, type Lang } from '../../i18n'
 import {
   getFontSizePreference,
   getThemePreference,
@@ -11,15 +15,23 @@ import {
 } from '../../services/theme'
 
 const SECTIONS = [
-  { key: 'server', icon: Server, label: '后端服务', desc: '配置 AgentHub Server 连接地址' },
-  { key: 'notify', icon: Bell, label: '通知', desc: '任务完成、审批提醒等通知设置' },
-  { key: 'theme', icon: Palette, label: '外观', desc: '主题颜色、字体大小、语言' }
+  { key: 'engine', icon: Cpu, labelKey: 'settings.sections.engine' },
+  { key: 'notify', icon: Bell, labelKey: 'settings.sections.notify' },
+  { key: 'theme', icon: Palette, labelKey: 'settings.sections.theme' }
 ]
 
 const NOTIFY_ITEMS = [
-  { key: 'taskDone', label: '任务完成通知', desc: '当 Agent 任务执行完成时通知' },
-  { key: 'approval', label: '审批提醒', desc: '有待审批操作时弹出提醒' },
-  { key: 'error', label: '错误告警', desc: 'Agent 执行出错时通知' }
+  {
+    key: 'taskDone',
+    labelKey: 'settings.notify.taskDone',
+    descKey: 'settings.notify.taskDoneDesc'
+  },
+  {
+    key: 'approval',
+    labelKey: 'settings.notify.approval',
+    descKey: 'settings.notify.approvalDesc'
+  },
+  { key: 'error', labelKey: 'settings.notify.error', descKey: 'settings.notify.errorDesc' }
 ]
 
 const NOTIFY_STORAGE_KEY = 'agenthub.notify'
@@ -35,13 +47,16 @@ function loadNotifyStates(): Record<string, boolean> {
 }
 
 export function SettingsPage(): React.JSX.Element {
-  const [activeSection, setActiveSection] = useState('server')
+  const t = useT()
+  const [activeSection, setActiveSection] = useState('engine')
   const [notifyStates, setNotifyStates] = useState<Record<string, boolean>>(loadNotifyStates)
 
   const toggleNotify = (key: string): void => {
     setNotifyStates((prev) => {
       const next = { ...prev, [key]: !prev[key] }
       localStorage.setItem(NOTIFY_STORAGE_KEY, JSON.stringify(next))
+      // 开启任一通知时顺带申请桌面通知权限，否则失焦提醒无法送达
+      if (next[key]) ensureDesktopPermission()
       return next
     })
   }
@@ -64,11 +79,11 @@ export function SettingsPage(): React.JSX.Element {
             className="text-base font-semibold m-0"
             style={{ color: 'var(--color-text-primary)' }}
           >
-            设置
+            {t('settings.title')}
           </h1>
         </div>
         <div className="flex-1 py-2">
-          {SECTIONS.map(({ key, icon: Icon, label }) => {
+          {SECTIONS.map(({ key, icon: Icon, labelKey }) => {
             const active = activeSection === key
             return (
               <button
@@ -83,7 +98,7 @@ export function SettingsPage(): React.JSX.Element {
                 }}
               >
                 <Icon size={16} />
-                <span>{label}</span>
+                <span>{t(labelKey)}</span>
               </button>
             )
           })}
@@ -91,7 +106,7 @@ export function SettingsPage(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto p-8" style={{ background: 'var(--color-bg-layout)' }}>
-        {activeSection === 'server' && <ServerSection />}
+        {activeSection === 'engine' && <EngineSection />}
         {activeSection === 'notify' && (
           <NotifySection states={notifyStates} onToggle={toggleNotify} />
         )}
@@ -101,54 +116,69 @@ export function SettingsPage(): React.JSX.Element {
   )
 }
 
-function ServerSection(): React.JSX.Element {
-  const [serverUrl, setServerUrl] = useState(
-    () => localStorage.getItem('agenthub.serverUrl') ?? 'http://localhost:8642'
-  )
-  const [saved, setSaved] = useState(false)
+/**
+ * 引擎状态与重启：原「后端地址」设置在 stdio 桥模式下并不生效（后端为主进程
+ * 拉起的子进程，无可配地址），故改为展示实际连接状态 + 重启入口。
+ */
+function EngineSection(): React.JSX.Element {
+  const t = useT()
+  const wsStatus = useAppStore((s) => s.wsStatus)
+  const bridgeError = useAppStore((s) => s.bridgeError)
+  const [restarting, setRestarting] = useState(false)
 
-  const handleSave = (): void => {
-    localStorage.setItem('agenthub.serverUrl', serverUrl.trim())
-    wsClient.disconnect()
-    wsClient.connect()
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  const statusMeta =
+    wsStatus === 'connected'
+      ? { tone: 'online' as const, labelKey: 'common.status.running' }
+      : wsStatus === 'connecting'
+        ? { tone: 'idle' as const, labelKey: 'common.status.connecting' }
+        : { tone: 'offline' as const, labelKey: 'common.status.disconnected' }
+
+  const handleRestart = async (): Promise<void> => {
+    setRestarting(true)
+    try {
+      await window.api.backend.restart()
+      wsClient.connect()
+    } finally {
+      setRestarting(false)
+    }
   }
 
   return (
     <div>
       <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
-        后端服务配置
+        {t('settings.engine.heading')}
       </h2>
       <div className="settings-card">
-        <label
-          className="block text-xs font-medium mb-2"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          AgentHub Server 地址
-        </label>
-        <div className="flex gap-2 items-center">
-          <input
-            type="text"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            className="styled-input"
-          />
-          <button onClick={handleSave} className="btn-brand">
-            保存
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <StatusDot status={statusMeta.tone} />
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
+                {t('settings.engine.statusLine', { status: t(statusMeta.labelKey) })}
+              </div>
+              <div className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
+                {t('settings.engine.hint')}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleRestart}
+            disabled={restarting}
+            className="btn-brand flex items-center gap-1.5 shrink-0"
+            style={{ opacity: restarting ? 0.6 : 1 }}
+          >
+            {restarting ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            {t('settings.engine.restart')}
           </button>
-          {saved && (
-            <span
-              className="flex items-center gap-1 text-xs shrink-0"
-              style={{ color: 'var(--color-success, #52c41a)' }}
-            >
-              <Check size={12} /> 已保存并重连
-            </span>
-          )}
         </div>
-        <p className="text-xs mt-2.5" style={{ color: 'var(--color-text-tertiary)' }}>
-          需先启动 AgentHub Server（默认 http://127.0.0.1:8642）
-        </p>
+        {bridgeError && (
+          <p
+            className="text-xs mt-3 leading-relaxed"
+            style={{ color: 'var(--color-error, #ff4d4f)' }}
+          >
+            {bridgeError}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -161,10 +191,11 @@ function NotifySection({
   states: Record<string, boolean>
   onToggle: (key: string) => void
 }): React.JSX.Element {
+  const t = useT()
   return (
     <div>
       <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
-        通知设置
+        {t('settings.notify.heading')}
       </h2>
       <div className="flex flex-col gap-3">
         {NOTIFY_ITEMS.map((item) => {
@@ -173,10 +204,10 @@ function NotifySection({
             <div key={item.key} className="settings-card flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium" style={{ color: 'var(--color-text-primary)' }}>
-                  {item.label}
+                  {t(item.labelKey)}
                 </div>
                 <div className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>
-                  {item.desc}
+                  {t(item.descKey)}
                 </div>
               </div>
               <div
@@ -204,18 +235,20 @@ function NotifySection({
 }
 
 function ThemeSection(): React.JSX.Element {
+  const t = useT()
+  const lang = useLang()
   const [theme, setTheme] = useState<ThemePreference>(getThemePreference)
   const [fontSize, setFontSize] = useState<FontSizePreference>(getFontSizePreference)
 
-  const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-    { value: 'light', label: '浅色' },
-    { value: 'dark', label: '深色' },
-    { value: 'system', label: '跟随系统' }
+  const THEME_OPTIONS: { value: ThemePreference; labelKey: string }[] = [
+    { value: 'light', labelKey: 'settings.theme.light' },
+    { value: 'dark', labelKey: 'settings.theme.dark' },
+    { value: 'system', labelKey: 'settings.theme.system' }
   ]
-  const FONT_OPTIONS: { value: FontSizePreference; label: string }[] = [
-    { value: 'small', label: '小（12px）' },
-    { value: 'default', label: '默认（14px）' },
-    { value: 'large', label: '大（16px）' }
+  const FONT_OPTIONS: { value: FontSizePreference; labelKey: string }[] = [
+    { value: 'small', labelKey: 'settings.theme.fontSmall' },
+    { value: 'default', labelKey: 'settings.theme.fontDefault' },
+    { value: 'large', labelKey: 'settings.theme.fontLarge' }
   ]
 
   const handleTheme = (value: ThemePreference): void => {
@@ -231,7 +264,7 @@ function ThemeSection(): React.JSX.Element {
   return (
     <div>
       <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
-        外观设置
+        {t('settings.theme.heading')}
       </h2>
       <div className="settings-card !p-0 overflow-hidden">
         <div
@@ -239,7 +272,7 @@ function ThemeSection(): React.JSX.Element {
           style={{ borderBottom: '1px solid var(--color-border-light)' }}
         >
           <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            主题
+            {t('settings.theme.theme')}
           </span>
           <select
             value={theme}
@@ -253,7 +286,7 @@ function ThemeSection(): React.JSX.Element {
           >
             {THEME_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
-                {o.label}
+                {t(o.labelKey)}
               </option>
             ))}
           </select>
@@ -263,16 +296,28 @@ function ThemeSection(): React.JSX.Element {
           style={{ borderBottom: '1px solid var(--color-border-light)' }}
         >
           <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            语言
+            {t('settings.theme.language')}
           </span>
-          <div className="flex items-center gap-1" style={{ color: 'var(--color-text-tertiary)' }}>
-            <span className="text-xs">简体中文</span>
-            <ChevronRight size={14} />
-          </div>
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value as Lang)}
+            className="text-xs px-2 py-1 rounded border outline-none cursor-pointer"
+            style={{
+              color: 'var(--color-text-secondary)',
+              borderColor: 'var(--color-border-light)',
+              background: 'var(--color-bg-spotlight)'
+            }}
+          >
+            {LANGS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="flex items-center justify-between px-4 py-3.5">
           <span className="text-sm" style={{ color: 'var(--color-text-primary)' }}>
-            字体大小
+            {t('settings.theme.fontSize')}
           </span>
           <select
             value={fontSize}
@@ -286,7 +331,7 @@ function ThemeSection(): React.JSX.Element {
           >
             {FONT_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
-                {o.label}
+                {t(o.labelKey)}
               </option>
             ))}
           </select>

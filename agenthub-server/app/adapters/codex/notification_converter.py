@@ -41,6 +41,60 @@ def _diff_stats(diff_text: str) -> tuple[int, int]:
     return additions, deletions
 
 
+def _parse_unified_diff(diff_text: str) -> list[dict[str, Any]]:
+    """git unified diff -> [DiffFileOut dict]（filename/additions/deletions/old/newContent）。
+
+    codex turn/diff/updated 只给聚合 unified diff（无结构化 files），前端变更面板需
+    per-file old/new 内容。在 hunk 范围内重建：上下文行入两侧，- 行入 old，+ 行入 new；
+    新建文件（--- /dev/null）old="";删除文件（+++ /dev/null）new=""。hunk 外未变内容
+    无法从 unified diff 还原（格式固有限制），但足以驱动 side-by-side 变更展示。
+    """
+    files: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
+    old_lines: list[str] = []
+    new_lines: list[str] = []
+
+    def _flush() -> None:
+        nonlocal cur, old_lines, new_lines
+        if cur is not None and cur.get("filename"):
+            cur["oldContent"] = "\n".join(old_lines)
+            cur["newContent"] = "\n".join(new_lines)
+            files.append(cur)
+        cur = None
+        old_lines = []
+        new_lines = []
+
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git"):
+            _flush()
+            cur = {"filename": "", "additions": 0, "deletions": 0}
+            continue
+        if cur is None:
+            continue
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            if path != "/dev/null":
+                cur["filename"] = path[2:] if path.startswith("b/") else path
+        elif line.startswith("--- "):
+            if not cur["filename"]:
+                path = line[4:].strip()
+                if path != "/dev/null":
+                    cur["filename"] = path[2:] if path.startswith("a/") else path
+        elif line.startswith("@@"):
+            continue
+        elif line.startswith("+"):
+            new_lines.append(line[1:])
+            cur["additions"] += 1
+        elif line.startswith("-"):
+            old_lines.append(line[1:])
+            cur["deletions"] += 1
+        elif line.startswith(" "):
+            old_lines.append(line[1:])
+            new_lines.append(line[1:])
+    _flush()
+    return files
+
+
 def _file_changes_payload(item: Any) -> list[dict[str, Any]]:
     """FileChangeThreadItem.changes -> [{path, kind, diff, additions, deletions}]"""
     changes: list[dict[str, Any]] = []
@@ -133,8 +187,10 @@ def convert_notification(
             adapter=ADAPTER_NAME,
         )]
 
-    # reasoning 增量（item/reasoning/delta 等）：思考通道，前端折叠展示
-    if "reasoning" in method and method.endswith("/delta"):
+    # reasoning 增量：codex 方法为 item/reasoning/summaryTextDelta / item/reasoning/textDelta
+    # （驼峰 Delta 结尾，payload.delta 为推理文本增量）；转 thinking 通道，前端 ThinkingCard
+    # 折叠展示。注意不能用 endswith("/delta") 判定——codex 用驼峰 ...Delta，会漏接。
+    if "reasoning" in method and method.lower().endswith("delta"):
         delta = str(getattr(payload, "delta", "") or "")
         if not delta:
             return []
@@ -191,7 +247,7 @@ def convert_notification(
             type="diff_update",
             data={
                 "summary": f"代码变更（+{additions}/-{deletions}）",
-                "files": [],
+                "files": _parse_unified_diff(diff_text),
                 "unified_diff": diff_text,
                 "additions": additions,
                 "deletions": deletions,
@@ -226,15 +282,26 @@ def convert_notification(
         )]
 
     if method == "error":
-        params = getattr(payload, "params", None)
-        message = ""
-        if isinstance(params, dict):
-            message = str(params.get("message", "") or params)
-        else:
-            message = str(getattr(payload, "message", "") or payload)
+        # ErrorNotification: {error: TurnError, will_retry: bool, ...}
+        # will_retry=True 表示 SDK 正在自动重连重试（如 503）——属瞬时错误，
+        # 走 transient_error ephemeral 通道（不落消息、不污染上下文）；恢复后前端自清。
+        # will_retry=False 才是真正失败，走 error（落库 + 失败任务）。
+        err = getattr(payload, "error", None)
+        reason = str(
+            getattr(err, "message", "")
+            or getattr(err, "additional_details", "")
+            or getattr(payload, "message", "")
+            or "模型调用错误"
+        )
+        if bool(getattr(payload, "will_retry", False)):
+            return [UnifiedEvent(
+                type="transient_error",
+                data={"error": reason, "will_retry": True},
+                adapter=ADAPTER_NAME,
+            )]
         return [UnifiedEvent(
             type="error",
-            data={"error": message},
+            data={"error": reason},
             adapter=ADAPTER_NAME,
         )]
 
