@@ -13,6 +13,7 @@ from app.config import resolve_mcp_servers
 from app.db.engine import get_data_dir
 from app.db.models import AgentRecord
 from app.memory import conversation_memory, summary, task_memory, token_meter
+from app.orchestrator import context_meter
 from app.orchestrator.prompts import (
     AgentSpec,
     PLANNER_USER_TEMPLATE,
@@ -249,6 +250,8 @@ async def build_context(
         else "（无）"
     )
 
+    # body_sections：按名采集本轮注入的可变段，既拼 body 又供 D 上下文观测
+    body_sections: list[tuple[str, str]] = []
     if task.agent == "reviewer":
         acceptance_text = await _collect_acceptance_text(session, conversation_id)
         body = REVIEWER_USER_TEMPLATE.format(
@@ -256,31 +259,33 @@ async def build_context(
             acceptance=acceptance_text,
             diff_text=task_text or "（暂无 Diff）",
         )
+        body_sections.append(("body(reviewer)", body))
     elif task.agent == "planner":
         body = PLANNER_USER_TEMPLATE.format(
             instructions=user_instructions,
             workspace_summary="（用 Glob/Grep/Read 按需探索项目结构与约定）",
             upstream_results=upstream_text,
         )
+        body_sections.append(("body(planner)", body))
     else:
-        sections = [f"## 当前任务\n{task.title}"]
+        body_sections.append(("task", f"## 当前任务\n{task.title}"))
         # B：把本任务的 EARS 验收标准注入实现者上下文，让其对标验收写代码（不只 reviewer 事后查）
         if getattr(task, "acceptance", ""):
-            sections.append(f"## 本任务验收标准（实现必须满足）\n{task.acceptance}")
-        sections.append(f"## 用户需求\n{user_instructions}")
+            body_sections.append(("acceptance", f"## 本任务验收标准（实现必须满足）\n{task.acceptance}"))
+        body_sections.append(("user_req", f"## 用户需求\n{user_instructions}"))
         if upstream_text != "（无）":
-            sections.append(_as_data("上游任务结果", upstream_text))
+            body_sections.append(("upstream", _as_data("上游任务结果", upstream_text)))
         if blackboard:
-            sections.append(_as_data("共享黑板", _format_blackboard(blackboard)))
+            body_sections.append(("blackboard", _as_data("共享黑板", _format_blackboard(blackboard))))
         if task_text:
-            sections.append(task_text)
+            body_sections.append(("task_memory", task_text))
         if summary_text and not resume_session_id:
             # resume 时 SDK 内部已含该 agent 早期历史，不重复注入摘要
-            sections.append(_as_data("早期对话摘要", summary_text))
+            body_sections.append(("summary", _as_data("早期对话摘要", summary_text)))
         if conv_text:
             history_title = "会话历史（自上次以来的新消息）" if resume_session_id else "会话历史"
-            sections.append(_as_data(history_title, conv_text))
-        body = "\n\n".join(sections)
+            body_sections.append(("history", _as_data(history_title, conv_text)))
+        body = "\n\n".join(t for _, t in body_sections)
 
     custom_rules = load_custom_rules(workspace_path)
     if conv_rules.strip():
@@ -295,6 +300,20 @@ async def build_context(
         "跨会话进展（.agenthub/progress.md）",
     )
     instructions = "\n\n".join(p for p in (progress, body) if p)
+
+    # D 上下文观测：量化各段 char/est-token，输出「哪段吃窗口」的真实分解（measure-first）
+    context_meter.log_context_breakdown(
+        conversation_id=conversation_id,
+        agent=task.agent,
+        sections={
+            "system": system,
+            "safety": _SAFETY_NOTE,
+            "rules+constitution": custom_rules,
+            "progress(xsession)": progress,
+            **dict(body_sections),
+        },
+        window_tokens=window_tokens,
+    )
     approval_mode, sandbox_level = _role_policy(
         task.agent, record.capabilities if record else None
     )

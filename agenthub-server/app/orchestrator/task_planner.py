@@ -1,7 +1,7 @@
 """需求 -> 结构化任务计划（PRD §3.1 / §6.1）。
 
-调用 LLM 生成 {goal, tasks[]} JSON；LLM 不可用时回退到规则模板，
-保证无 API Key 环境（Mock 演示）下编排链路依然完整。
+调用 LLM 生成 {goal, tasks[]} JSON；LLM 不可用 / 解析失败时回退到规则模板，
+保证决策器异常时编排链路依然完整。
 """
 
 from __future__ import annotations
@@ -530,7 +530,7 @@ async def decide(
         from app.orchestrator.agent_router import PLANNING_PRIORITY
 
         # Orchestrator 在 DB 指定了适配器偏好时优先使用，其余按规划优先级探测
-        # （claude-code -> codex；排除 mock：mock 假文本必然解析失败，直接走规则回退）
+        # （claude-code -> codex）
         pref, pref_provider, pref_model = await _get_orchestrator_routing()
         candidates = ([pref] if pref else []) + [n for n in PLANNING_PRIORITY if n != pref]
 

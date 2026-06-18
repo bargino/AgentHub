@@ -42,13 +42,3 @@ adapters:
       approval_timeout_s: 600
       # 命令审批白名单前置：ALLOWED 自动放行 / BLOCKED 自动拦截 / 其余人工审批
       whitelist_precheck: true
-
-  # 无 API Key 环境的全链路演示/冒烟执行器（路由优先级最低，
-  # 仅在真实 SDK 均不可用或 Agent 显式指定 adapter_type=mock 时被选中）
-  mock:
-    enabled: true
-    module: app.adapters.mock.adapter
-    class: MockAdapter
-    config:
-      approval_timeout_s: 120
-      step_delay_s: 0.05

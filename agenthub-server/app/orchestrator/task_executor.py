@@ -26,7 +26,10 @@ from app.core.event_bus import get_event_bus
 from app.core.registry import get_global_registry
 from app.db.engine import get_session_factory
 from app.memory import task_memory, token_meter
-from app.orchestrator.agent_router import ADAPTER_PRIORITY, resolve_adapter
+from app.orchestrator.agent_router import (
+    ADAPTER_PRIORITY,
+    resolve_adapter_candidates,
+)
 from app.orchestrator.context_builder import build_context
 from app.orchestrator.review import (
     compose_selection_prompt,
@@ -53,8 +56,15 @@ logger = logging.getLogger(__name__)
 # 全局并发限流：同时活跃的 adapter 执行数上限（防 SDK 子进程爆 / 资源耗尽）
 _MAX_CONCURRENT_AGENTS = max(1, int(os.environ.get("AGENTHUB_MAX_CONCURRENT_AGENTS") or "4"))
 _agent_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_AGENTS)
-# 单任务执行总超时（秒）；0 = 不限（默认，避免误杀正常长任务）。>0 时超时 interrupt 回收
-_AGENT_TIMEOUT_S = float(os.environ.get("AGENTHUB_AGENT_TIMEOUT_S") or "0")
+# 单任务执行总超时（秒）。默认 900s(15min)：足够真实编码任务，又能切断跑飞/卡死的 agent
+# （防无限挂起——harness「失败可恢复」红线）；超长任务经 AGENTHUB_AGENT_TIMEOUT_S 调大，
+# 设 0 显式关闭。超时走 interrupt 回收 + 任务置 failed（可被失败重规划接手）。
+_AGENT_TIMEOUT_S = float(os.environ.get("AGENTHUB_AGENT_TIMEOUT_S") or "900")
+
+# 执行态 adapter 回退开关（2️⃣）。默认关：硬失败不自动换 adapter——避免中途失败后换 adapter
+# 从头重启、丢失本次尝试的过程态（仍可由失败重规划接手）。
+# AGENTHUB_ADAPTER_FALLBACK=1 开启：硬失败按健康候选依次换 adapter 重试同任务。
+_ADAPTER_FALLBACK = os.environ.get("AGENTHUB_ADAPTER_FALLBACK", "0") == "1"
 
 
 _RISK_RANK = {"low": 0, "medium": 1, "high": 2}
@@ -182,16 +192,25 @@ class TaskRunner:
         self.sdk_session_id: str | None = None
         # run() 路由适配器后回填；早期失败（路由/建上下文阶段）时保持空串
         self.adapter_name: str = ""
+        # 执行态 adapter 回退（2️⃣）：非最后一个候选失败时不终结，重置后换下一个 adapter 重试。
+        # _finalize_on_fail=False 时硬失败只清理不置 failed；_hard_failed 区分硬失败与用户取消。
+        self._finalize_on_fail: bool = True
+        self._hard_failed: bool = False
 
     async def run(self) -> bool:
-        """返回任务是否成功。"""
+        """返回任务是否成功。
+
+        执行态 adapter 回退（2️⃣）：硬失败（adapter 报错 / 超时 / 异常，非用户取消）时，
+        若还有其它健康候选 adapter，重置本次累积态后换下一个重试同任务；全部失败才终结
+        （置 failed，由失败重规划接手）。单候选时与原行为完全一致。
+        """
         cid = self.state.conversation_id
         factory = _session_factory()
 
         async with factory() as session:
             async with session.begin():
                 await task_service.update_task_status(session, self.db_task_id, "running")
-                adapter, adapter_name = await resolve_adapter(
+                candidates = await resolve_adapter_candidates(
                     session, get_global_registry(), self.agent_role,
                     member_ids=self.state.member_agent_ids,
                 )
@@ -202,6 +221,26 @@ class TaskRunner:
                 ]
                 upstream = await task_memory.get_upstream_results(session, cid, upstream_db_ids)
                 board = await blackboard_service.get_all(session, cid)
+
+        if not candidates:
+            self._finalize_on_fail = True
+            await self._fail(
+                f"没有可用的 Agent 适配器（角色: {self.agent_role}）。"
+                "请确保已安装 claude-agent-sdk 或 openai-codex 并完成登录。"
+            )
+            return False
+
+        # 默认不自动切换 adapter：只用首个候选（行为同单 adapter）；开关开启才启用回退
+        if not _ADAPTER_FALLBACK:
+            candidates = candidates[:1]
+
+        last_idx = len(candidates) - 1
+        for idx, (adapter, adapter_name) in enumerate(candidates):
+            self.adapter_name = adapter_name
+            self._finalize_on_fail = idx == last_idx
+            self._hard_failed = False
+            # ctx 按候选 adapter 重建：SDK resume 映射是 per-adapter 的，回退换 adapter 须重建
+            async with factory() as session:
                 ctx = await build_context(
                     session,
                     conversation_id=cid,
@@ -217,16 +256,49 @@ class TaskRunner:
                     blackboard=board,
                 )
 
-        self.adapter_name = adapter_name
-        # 写型任务（非只读沙箱）串行持锁：会话级单 workspace 下避免并行写覆盖；
-        # 只读任务不持锁，保留并行收益
-        if ctx.sandbox_level == UnifiedSandboxLevel.READ_ONLY:
-            return await self._consume(adapter, ctx)
-        async with self.state.write_lock:
-            ok = await self._consume(adapter, ctx)
+            # 写型任务（非只读沙箱）串行持锁：会话级单 workspace 下避免并行写覆盖；
+            # 只读任务不持锁，保留并行收益
+            if ctx.sandbox_level == UnifiedSandboxLevel.READ_ONLY:
+                ok = await self._consume(adapter, ctx)
+            else:
+                async with self.state.write_lock:
+                    ok = await self._consume(adapter, ctx)
+                    if ok:
+                        await self._stage_changes()
+
             if ok:
-                await self._stage_changes()
-            return ok
+                return True
+            if not self._hard_failed:
+                return False  # 用户取消（非硬失败）：状态已置 cancelled，不回退
+            if idx < last_idx:
+                logger.warning(
+                    "任务 %s 在 adapter=%s 硬失败，回退到下一个候选 adapter 重试",
+                    self.db_task_id, adapter_name,
+                )
+                self._reset_for_retry()
+                continue
+            return False  # 最后一个候选硬失败：已在 _consume 内 _fail 终结
+        return False
+
+    def _reset_for_retry(self) -> None:
+        """回退到下一个 adapter 前重置本次尝试的累积态，避免跨 adapter 输出串台。"""
+        self.message_id = uuid.uuid4().hex
+        self.text_parts = []
+        self.thinking_parts = []
+        self.thinking_message_id = uuid.uuid4().hex
+        self.thinking_started = None
+        self.delta_mode = False
+        self.tool_msg_ids = {}
+        self.running_tool_msgs = set()
+        self.sdk_session_id = None
+
+    async def _finalize_or_cleanup(self, reason: str) -> None:
+        """硬失败收口：最后一个候选 → 完整 _fail（置 failed）；否则只清理 partial，留待回退重试。"""
+        if self._finalize_on_fail:
+            await self._fail(reason)
+        else:
+            await self._flush_thinking()
+            await self._finalize_running_tools("failed")
 
     async def _stage_changes(self) -> None:
         """写型任务成功后把已落盘的（已审批）变更暂存进 git，让 git 面板可见；
@@ -258,11 +330,13 @@ class TaskRunner:
                 await adapter.interrupt()
             except Exception:
                 logger.debug("interrupt after timeout failed", exc_info=True)
-            await self._fail(f"执行超时（>{_AGENT_TIMEOUT_S}s）")
+            self._hard_failed = True
+            await self._finalize_or_cleanup(f"执行超时（>{_AGENT_TIMEOUT_S}s）")
             return False
         except Exception as e:
             logger.exception("Task %s execution crashed", self.db_task_id)
-            await self._fail(f"执行异常：{e}")
+            self._hard_failed = True
+            await self._finalize_or_cleanup(f"执行异常：{e}")
             return False
 
     async def _drain(self, adapter: Any, ctx: Any) -> bool:
@@ -497,6 +571,8 @@ class TaskRunner:
             # 真实 token 计量落库（压力分级 / 成本统计数据源）
             usage = token_meter.normalize_usage(event.data.get("usage"))
             msg_meta: dict[str, Any] = {"tokenUsage": usage} if usage else {}
+            # ② D 延伸：观测 prompt 缓存命中率（成本最大杆，须可度量）
+            token_meter.log_cache_usage(usage, agent=self.agent_role, task_id=self.db_task_id)
             # Reviewer 双产出：解析文末 ===VERDICT=== 裁决入 meta（供 engine 回环判定），
             # 正文剥离 marker 后再展示/落库，用户界面只见友好 Markdown
             display_text = full_text
@@ -552,7 +628,8 @@ class TaskRunner:
             return not cancelled
 
         if event.type == "error":
-            await self._fail(str(event.data.get("error", "未知错误")))
+            self._hard_failed = True
+            await self._finalize_or_cleanup(str(event.data.get("error", "未知错误")))
             return False
 
         # started / file_change 等：仅事件存储，无业务转换
