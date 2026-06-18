@@ -9,7 +9,7 @@ export type TaskStatus =
 export type AgentRole = string
 export type RiskLevel = 'low' | 'medium' | 'high'
 /** 右侧停靠区单实例 tab：审查（diff+审批合一）/ 任务 / Git / 预览 */
-export type RightTab = 'review' | 'task' | 'git' | 'preview' | 'spec'
+export type RightTab = 'review' | 'task' | 'git' | 'preview' | 'plan'
 
 export interface Conversation {
   id: string

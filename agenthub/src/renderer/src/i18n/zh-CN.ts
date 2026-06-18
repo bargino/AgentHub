@@ -55,13 +55,13 @@ export const zhCN: Dict = {
   rightDock: {
     review: '审查',
     task: '任务',
-    spec: '规格',
+    plan: '计划',
     git: 'Git',
     preview: '预览'
   },
-  spec: {
-    noConversation: '选择一个会话查看其规格',
-    empty: '暂无规格（多步 pipeline 任务才会生成）',
+  plan: {
+    noConversation: '选择一个会话查看其计划',
+    empty: '暂无计划（多步 pipeline 任务才会生成）',
     refresh: '刷新',
     save: '保存',
     saved: '已保存',
@@ -240,14 +240,14 @@ export const zhCN: Dict = {
       mentionTitle: '@Agent 直达',
       mentionDesc: '@coder 改这里、@reviewer 审查',
       slashTitle: '/ 快捷命令',
-      slashDesc: '/plan 出方案、/tasks 看进度'
+      slashDesc: '/plan 出计划、/tasks 看进度'
     },
     toolbar: {
       group: '群设置',
       taskTitle: '任务面板',
       task: '任务',
-      specTitle: '规格文档（需求 / 设计 / 任务三件套）',
-      spec: '规格',
+      planTitle: '计划文档（需求 / 设计 / 任务三件套）',
+      plan: '计划',
       filesTitle: '工作区文件变更与提交历史',
       files: '文件',
       diffTitle: 'Diff 查看',
@@ -276,14 +276,14 @@ export const zhCN: Dict = {
       send: '发送',
       roleDesc: {
         orchestrator: '需求拆解与任务编排',
-        planner: '分析项目结构与方案',
+        planner: '分析项目结构与计划',
         coder: '代码修改与实现',
         reviewer: '代码审查',
         preview: '启动网页预览',
         deployer: '确认并部署'
       },
       cmd: {
-        plan: '让 Planner 制定方案',
+        plan: '让 Planner 制定计划',
         review: '发起代码审查',
         deploy: '发起部署流程',
         tasks: '打开任务面板',
@@ -437,8 +437,8 @@ export const zhCN: Dict = {
     },
     roleDesc: {
       orchestrator: '编排中心，自动拆解需求并调度其他 Agent 协作完成任务。',
-      planner: '分析项目结构，制定实现方案，输出详细的技术规划。',
-      coder: '根据规划执行代码修改、新增功能、修复 Bug，输出可执行的 Diff。',
+      planner: '分析项目结构，制定实现计划，输出详细的技术计划。',
+      coder: '根据计划执行代码修改、新增功能、修复 Bug，输出可执行的 Diff。',
       reviewer: '对 Coder 输出的代码进行审查，发现潜在问题并提出改进建议。',
       deployer: '将代码构建并部署到目标环境，需用户审批后执行。'
     }

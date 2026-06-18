@@ -19,8 +19,8 @@ from app.schemas import (
     MessageOut,
     PlanReviseIn,
     RollbackIn,
-    SpecFileOut,
-    SpecFileWrite,
+    PlanFileOut,
+    PlanFileWrite,
     TaskOut,
 )
 from app.services import approval as approval_service
@@ -155,53 +155,53 @@ async def revise_plan_endpoint(conversation_id: str, data: PlanReviseIn) -> dict
     return {"ok": True}
 
 
-@router.get("/conversations/{conversation_id}/specs", response_model=list[SpecFileOut])
-async def list_specs(
+@router.get("/conversations/{conversation_id}/plans", response_model=list[PlanFileOut])
+async def list_plans(
     conversation_id: str, db: AsyncSession = Depends(get_db)
-) -> list[SpecFileOut]:
-    """item 2：列出该会话的规格文件（Spec Kit 三件套 + 合并版），供前端评审 / 逐条编辑。
+) -> list[PlanFileOut]:
+    """item 2：列出该会话的计划文件（Spec Kit 三件套 + 合并版），供前端评审 / 逐条编辑。
 
     工作区尚未创建（会话还没真正执行过 pipeline）时返回空列表，而非报错。
     """
-    from app.services import spec_store
+    from app.services import plan_store
 
     ws = await workspace_service.get_workspace(db, conversation_id)
     if ws is None:
         return []
-    return [SpecFileOut(**it) for it in spec_store.list_spec_files(ws.path, conversation_id)]
+    return [PlanFileOut(**it) for it in plan_store.list_plan_files(ws.path, conversation_id)]
 
 
-@router.get("/conversations/{conversation_id}/specs/file")
-async def get_spec_file(
+@router.get("/conversations/{conversation_id}/plans/file")
+async def get_plan_file(
     conversation_id: str, path: str, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """item 2：读取单个规格文件内容（路径限定在 specs 根内，越界 / 非 .md 一律拒绝）。"""
-    from app.services import spec_store
+    """item 2：读取单个计划文件内容（路径限定在 plans 根内，越界 / 非 .md 一律拒绝）。"""
+    from app.services import plan_store
 
     ws = await workspace_service.get_workspace(db, conversation_id)
     if ws is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    content = spec_store.read_spec_file(ws.path, path)
+    content = plan_store.read_plan_file(ws.path, path)
     if content is None:
-        raise HTTPException(status_code=404, detail="Spec file not found")
+        raise HTTPException(status_code=404, detail="Plan file not found")
     return {"path": path, "content": content}
 
 
-@router.patch("/conversations/{conversation_id}/specs/file")
-async def save_spec_file(
-    conversation_id: str, data: SpecFileWrite, db: AsyncSession = Depends(get_db)
+@router.patch("/conversations/{conversation_id}/plans/file")
+async def save_plan_file(
+    conversation_id: str, data: PlanFileWrite, db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """item 2：保存单个规格文件（文件级逐条编辑落盘；路径限定在 specs 根内，防穿越）。
+    """item 2：保存单个计划文件（文件级逐条编辑落盘；路径限定在 plans 根内，防穿越）。
 
     用 PATCH 而非 PUT：前端 stdio 桥仅支持 GET/POST/PATCH/DELETE（见 services/http.ts）。
     """
-    from app.services import spec_store
+    from app.services import plan_store
 
     ws = await workspace_service.get_workspace(db, conversation_id)
     if ws is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if not spec_store.write_spec_file(ws.path, data.path, data.content):
-        raise HTTPException(status_code=400, detail="Invalid spec path")
+    if not plan_store.write_plan_file(ws.path, data.path, data.content):
+        raise HTTPException(status_code=400, detail="Invalid plan path")
     return {"ok": True, "path": data.path}
 
 

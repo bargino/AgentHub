@@ -121,38 +121,38 @@ export async function rollbackConversation(
   })
 }
 
-// ---- 规格（spec-driven · Spec Kit 三件套 + 合并版，item 2）----
-export interface SpecFile {
+// ---- 计划（spec-driven · Spec Kit 三件套 + 合并版，item 2）----
+export interface PlanFile {
   name: string
   path: string
   size: number
   mtime: string
 }
 
-/** 列出该会话的规格文件（无 workspace 时返回 []） */
-export async function listSpecs(conversationId: string): Promise<SpecFile[]> {
-  return getJson<SpecFile[]>(`/conversations/${conversationId}/specs`)
+/** 列出该会话的计划文件（无 workspace 时返回 []） */
+export async function listPlans(conversationId: string): Promise<PlanFile[]> {
+  return getJson<PlanFile[]>(`/conversations/${conversationId}/plans`)
 }
 
-/** 读取单个规格文件内容（路径限定在 specs 根内） */
-export async function getSpecFile(
+/** 读取单个计划文件内容（路径限定在 plans 根内） */
+export async function getPlanFile(
   conversationId: string,
   path: string
 ): Promise<{ path: string; content: string }> {
   const params = new URLSearchParams({ path })
   return getJson<{ path: string; content: string }>(
-    `/conversations/${conversationId}/specs/file?${params.toString()}`
+    `/conversations/${conversationId}/plans/file?${params.toString()}`
   )
 }
 
-/** 保存单个规格文件（文件级逐条编辑落盘） */
-export async function saveSpecFile(
+/** 保存单个计划文件（文件级逐条编辑落盘） */
+export async function savePlanFile(
   conversationId: string,
   path: string,
   content: string
 ): Promise<{ ok: boolean; path: string }> {
   return patchJson<{ ok: boolean; path: string }>(
-    `/conversations/${conversationId}/specs/file`,
+    `/conversations/${conversationId}/plans/file`,
     { path, content }
   )
 }

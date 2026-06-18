@@ -137,7 +137,7 @@ class PlannedTask:
     title: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
-    # Phase 2：EARS 风格验收标准（"当 X，系统应 Y"），供 spec 落盘与 reviewer/eval 对标
+    # Phase 2：EARS 风格验收标准（"当 X，系统应 Y"），供计划落盘与 reviewer/eval 对标
     acceptance: str = ""
     # #10 >1 时该任务派 N 个 cross-model attempt 并行出方案（只读），裁决择优后单点落地
     fan_out: int = 1

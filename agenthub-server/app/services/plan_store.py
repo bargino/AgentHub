@@ -1,7 +1,7 @@
-"""规格落盘（Phase 0 · spec-driven）：把 Orchestrator 的 TaskPlan 持久化为可评审的 spec 文档。
+"""计划落盘（Phase 0 · spec-driven）：把 Orchestrator 的 TaskPlan 持久化为可评审的计划文档。
 
 SDD 第一类 artifact：goal + 任务清单（标题 / 负责 agent / 依赖 / 是否需审批）写到
-`{workspace}/.agenthub/specs/<conversation_id>-<trace_id>.md`，人可读、可 review、可进 git、可 diff。
+`{workspace}/.agenthub/plans/<conversation_id>-<trace_id>.md`，人可读、可 review、可进 git、可 diff。
 
 设计取舍：
 - 仅 pipeline（复杂多步）模式落盘；direct / single（简单 / 直达）不写，避免简单任务额外开销。
@@ -20,27 +20,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 规格文档相对工作区的存放目录（与 .agenthub/progress.md 同处一个隐藏目录）
-SPECS_SUBDIR = ".agenthub/specs"
+# 计划文档相对工作区的存放目录（与 .agenthub/progress.md 同处一个隐藏目录）
+PLANS_SUBDIR = ".agenthub/plans"
 
 
-def spec_path(workspace_path: str, conversation_id: str, trace_id: str) -> Path:
-    """规格文件路径：{workspace}/.agenthub/specs/<conversation>-<trace>.md。"""
+def plan_path(workspace_path: str, conversation_id: str, trace_id: str) -> Path:
+    """计划文件路径：{workspace}/.agenthub/plans/<conversation>-<trace>.md。"""
     safe_trace = (trace_id or "notrace")[:16]
-    return Path(workspace_path) / SPECS_SUBDIR / f"{conversation_id}-{safe_trace}.md"
+    return Path(workspace_path) / PLANS_SUBDIR / f"{conversation_id}-{safe_trace}.md"
 
 
-def render_spec(
+def render_plan(
     plan: "TaskPlan",
     *,
     conversation_id: str,
     trace_id: str,
     instructions: str,
 ) -> str:
-    """把 TaskPlan 渲染为结构化 Markdown 规格文档。"""
+    """把 TaskPlan 渲染为结构化 Markdown 计划文档。"""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
-        f"# 规格：{plan.goal}",
+        f"# 计划：{plan.goal}",
         "",
         f"- 会话：`{conversation_id}`",
         f"- Trace：`{trace_id}`",
@@ -64,13 +64,13 @@ def render_spec(
     lines.extend(
         [
             "",
-            "> 本文件由 AgentHub 规划阶段自动生成（Phase 0 规格落盘）；可人工评审 / 修改 / 进 git。",
+            "> 本文件由 AgentHub 规划阶段自动生成（Phase 0 计划落盘）；可人工评审 / 修改 / 进 git。",
         ]
     )
     return "\n".join(lines)
 
 
-def write_spec(
+def write_plan(
     workspace_path: str,
     plan: "TaskPlan",
     *,
@@ -78,30 +78,30 @@ def write_spec(
     trace_id: str,
     instructions: str,
 ) -> str | None:
-    """写规格文档到工作区 `.agenthub/specs/`，返回路径字符串；失败返回 None（不阻塞主链路）。"""
+    """写计划文档到工作区 `.agenthub/plans/`，返回路径字符串；失败返回 None（不阻塞主链路）。"""
     if not workspace_path or plan is None or not plan.tasks:
         return None
     try:
-        path = spec_path(workspace_path, conversation_id, trace_id)
+        path = plan_path(workspace_path, conversation_id, trace_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = render_spec(
+        content = render_plan(
             plan,
             conversation_id=conversation_id,
             trace_id=trace_id,
             instructions=instructions,
         )
         path.write_text(content, encoding="utf-8")
-        logger.info("规格已落盘：%s", path)
+        logger.info("计划已落盘：%s", path)
         return str(path)
     except OSError:
-        logger.warning("规格落盘失败：%s", workspace_path, exc_info=True)
+        logger.warning("计划落盘失败：%s", workspace_path, exc_info=True)
         return None
 
 
 def triplet_dir(workspace_path: str, conversation_id: str, trace_id: str) -> Path:
-    """三件套规格目录：{workspace}/.agenthub/specs/<conversation>-<trace>/。"""
+    """三件套计划目录：{workspace}/.agenthub/plans/<conversation>-<trace>/。"""
     safe_trace = (trace_id or "notrace")[:16]
-    return Path(workspace_path) / SPECS_SUBDIR / f"{conversation_id}-{safe_trace}"
+    return Path(workspace_path) / PLANS_SUBDIR / f"{conversation_id}-{safe_trace}"
 
 
 def _mermaid_dag(plan: "TaskPlan") -> list[str]:
@@ -120,7 +120,7 @@ def _mermaid_dag(plan: "TaskPlan") -> list[str]:
 def render_requirements(plan: "TaskPlan", instructions: str) -> str:
     """requirements.md（Spec Kit 三件套之一）：原始需求 + 每步 EARS 验收作为可核验需求项。"""
     lines = [
-        f"# 需求规格：{plan.goal}",
+        f"# 需求：{plan.goal}",
         "",
         "## 原始需求",
         (instructions.strip() or "（空）"),
@@ -144,7 +144,7 @@ def render_requirements(plan: "TaskPlan", instructions: str) -> str:
 def render_design(plan: "TaskPlan") -> str:
     """design.md（Spec Kit 三件套之一）：目标 + 任务编排图（DAG）+ 角色分工。"""
     lines = [
-        f"# 设计 / 方案：{plan.goal}",
+        f"# 设计：{plan.goal}",
         "",
         "## 任务编排（DAG）",
         "",
@@ -178,7 +178,7 @@ def render_tasks(plan: "TaskPlan") -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_spec_triplet(
+def write_plan_triplet(
     workspace_path: str,
     plan: "TaskPlan",
     *,
@@ -188,7 +188,7 @@ def write_spec_triplet(
 ) -> dict[str, str] | None:
     """写 Spec Kit 三件套（requirements/design/tasks.md）到独立目录，返回 {文件名: 路径}。
 
-    与合并版 spec（write_spec）并存：合并版承载「活文档」回写，三件套供文件级评审/逐条编辑。
+    与合并版计划（write_plan）并存：合并版承载「活文档」回写，三件套供文件级评审/逐条编辑。
     失败只告警不阻塞主链路。
     """
     if not workspace_path or plan is None or not plan.tasks:
@@ -206,20 +206,20 @@ def write_spec_triplet(
             p = d / name
             p.write_text(content, encoding="utf-8")
             out[name] = str(p)
-        logger.info("规格三件套已落盘：%s", d)
+        logger.info("计划三件套已落盘：%s", d)
         return out
     except OSError:
-        logger.warning("规格三件套落盘失败：%s", workspace_path, exc_info=True)
+        logger.warning("计划三件套落盘失败：%s", workspace_path, exc_info=True)
         return None
 
 
-def _specs_root(workspace_path: str) -> Path:
-    return Path(workspace_path) / SPECS_SUBDIR
+def _plans_root(workspace_path: str) -> Path:
+    return Path(workspace_path) / PLANS_SUBDIR
 
 
-def _resolve_within_specs(workspace_path: str, relpath: str) -> Path | None:
-    """把 relpath 解析到 specs 根内，越界 / 非 .md 一律拒绝（防路径穿越）。"""
-    root = _specs_root(workspace_path).resolve()
+def _resolve_within_plans(workspace_path: str, relpath: str) -> Path | None:
+    """把 relpath 解析到 plans 根内，越界 / 非 .md 一律拒绝（防路径穿越）。"""
+    root = _plans_root(workspace_path).resolve()
     try:
         target = (root / relpath).resolve()
     except (OSError, ValueError):
@@ -231,9 +231,9 @@ def _resolve_within_specs(workspace_path: str, relpath: str) -> Path | None:
     return target
 
 
-def list_spec_files(workspace_path: str, conversation_id: str) -> list[dict]:
-    """列出该会话的所有规格文件（合并版 + 三件套），返回 [{name, path(相对 specs 根), size, mtime}]。"""
-    root = _specs_root(workspace_path)
+def list_plan_files(workspace_path: str, conversation_id: str) -> list[dict]:
+    """列出该会话的所有计划文件（合并版 + 三件套），返回 [{name, path(相对 plans 根), size, mtime}]。"""
+    root = _plans_root(workspace_path)
     if not root.is_dir():
         return []
     out: list[dict] = []
@@ -259,9 +259,9 @@ def list_spec_files(workspace_path: str, conversation_id: str) -> list[dict]:
     return out
 
 
-def read_spec_file(workspace_path: str, relpath: str) -> str | None:
-    """读取 specs 根内的规格文件内容；越界 / 不存在返回 None。"""
-    target = _resolve_within_specs(workspace_path, relpath)
+def read_plan_file(workspace_path: str, relpath: str) -> str | None:
+    """读取 plans 根内的计划文件内容；越界 / 不存在返回 None。"""
+    target = _resolve_within_plans(workspace_path, relpath)
     if target is None or not target.is_file():
         return None
     try:
@@ -270,9 +270,9 @@ def read_spec_file(workspace_path: str, relpath: str) -> str | None:
         return None
 
 
-def write_spec_file(workspace_path: str, relpath: str, content: str) -> bool:
-    """写入 specs 根内的规格文件（文件级逐条编辑落盘）；越界返回 False。"""
-    target = _resolve_within_specs(workspace_path, relpath)
+def write_plan_file(workspace_path: str, relpath: str, content: str) -> bool:
+    """写入 plans 根内的计划文件（文件级逐条编辑落盘）；越界返回 False。"""
+    target = _resolve_within_plans(workspace_path, relpath)
     if target is None:
         return False
     try:
@@ -280,7 +280,7 @@ def write_spec_file(workspace_path: str, relpath: str, content: str) -> bool:
         target.write_text(content, encoding="utf-8")
         return True
     except OSError:
-        logger.warning("规格文件写入失败：%s", relpath, exc_info=True)
+        logger.warning("计划文件写入失败：%s", relpath, exc_info=True)
         return False
 
 
@@ -290,18 +290,18 @@ def append_outcome(
     trace_id: str,
     statuses: list[tuple[str, str]],
 ) -> str | None:
-    """C：执行收口后把任务状态回写 spec，形成"活文档"（规划 + 实际结果同处一份）。
+    """C：执行收口后把任务状态回写计划，形成"活文档"（规划 + 实际结果同处一份）。
 
-    statuses 为 [(任务标题, 状态)]。trace 对不上时（重启重建场景）回退到该会话最新的 spec。
+    statuses 为 [(任务标题, 状态)]。trace 对不上时（重启重建场景）回退到该会话最新的计划。
     写失败只告警不阻塞。
     """
     if not workspace_path or not statuses:
         return None
     try:
-        path = spec_path(workspace_path, conversation_id, trace_id)
+        path = plan_path(workspace_path, conversation_id, trace_id)
         if not path.is_file():
             cands = sorted(
-                (Path(workspace_path) / SPECS_SUBDIR).glob(f"{conversation_id}-*.md"),
+                (Path(workspace_path) / PLANS_SUBDIR).glob(f"{conversation_id}-*.md"),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
@@ -317,5 +317,5 @@ def append_outcome(
             f.write("\n" + "\n".join(lines) + "\n")
         return str(path)
     except OSError:
-        logger.warning("规格执行结果回写失败：%s", workspace_path, exc_info=True)
+        logger.warning("计划执行结果回写失败：%s", workspace_path, exc_info=True)
         return None

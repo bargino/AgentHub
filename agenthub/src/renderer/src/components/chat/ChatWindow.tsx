@@ -508,11 +508,11 @@ export function ChatWindow(): React.JSX.Element {
               active={rightTab === 'task'}
             />
             <ToolbarButton
-              onClick={() => setTab('spec')}
-              title={tr('chat.toolbar.specTitle')}
+              onClick={() => setTab('plan')}
+              title={tr('chat.toolbar.planTitle')}
               icon={<FileText size={14} />}
-              label={tr('chat.toolbar.spec')}
-              active={rightTab === 'spec'}
+              label={tr('chat.toolbar.plan')}
+              active={rightTab === 'plan'}
             />
             <ToolbarButton
               onClick={() => setTab('git')}

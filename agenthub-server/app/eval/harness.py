@@ -72,9 +72,9 @@ Scorer = Callable[["GoldenCase"], Awaitable["JudgeResult"]]
 
 
 def rubric_from_acceptance(criteria: list[str]) -> str:
-    """把任务的 EARS 验收标准拼成 judge rubric（Phase 3：规格=评测，spec 即评测标准）。
+    """把任务的 EARS 验收标准拼成 judge rubric（Phase 3：计划=评测，计划即评测标准）。
 
-    供从 spec / Task.acceptance 构造 GoldenCase.rubric，使离线评测与运行时复审同口径。
+    供从计划 / Task.acceptance 构造 GoldenCase.rubric，使离线评测与运行时复审同口径。
     无验收标准时回退到按需求评估，不编造标准。
     """
     items = [c.strip() for c in criteria if c and c.strip()]

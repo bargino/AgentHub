@@ -149,7 +149,7 @@ async def _get_agent_record(
 
 
 async def _collect_acceptance_text(session: AsyncSession, conversation_id: str) -> str:
-    """汇总本会话各任务的 EARS 验收标准为复审核对清单（Phase 3：规格=评测）。
+    """汇总本会话各任务的 EARS 验收标准为复审核对清单（Phase 3：计划=评测）。
 
     无显式验收标准时回退「按原始需求审查」，不强制 reviewer 编造标准。
     """

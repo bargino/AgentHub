@@ -4,7 +4,7 @@
 产出 + 标注 expect_pass。正样本应被 judge 判为达标；负样本（错误/缺失产出）应被门禁拦下。
 跑 golden set 得到「judge 与标注一致率（accuracy）」与「正样本通过率」，作为质量门禁基线。
 
-与运行时复审同口径：rubric 也来自 EARS 验收（Phase 3：规格=评测），保证离线评测与线上一致。
+与运行时复审同口径：rubric 也来自 EARS 验收（Phase 3：计划=评测），保证离线评测与线上一致。
 """
 
 from __future__ import annotations

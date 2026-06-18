@@ -628,11 +628,11 @@ async def _execute_and_finalize(
                 task_lines=statuses,
                 conclusion=f"{success_n}/{len(statuses)} 任务成功",
             )
-            # C：把执行结果回写 spec（活文档）；仅 pipeline 有 spec 文件
+            # C：把执行结果回写计划（活文档）；仅 pipeline 有计划文件
             if mode == "pipeline":
-                from app.services import spec_store
+                from app.services import plan_store
 
-                spec_store.append_outcome(workspace_path, conversation_id, trace_id, statuses)
+                plan_store.append_outcome(workspace_path, conversation_id, trace_id, statuses)
         except Exception:
             logger.warning("progress.md 收口写入失败", exc_info=True)
 
@@ -897,11 +897,11 @@ class OrchestratorEngine(IMessageHandler):
             # #7 规划阶段埋点（补 decide 阶段缺失的 record_event，含 trace_id）
             await _record_planning(factory, conversation_id, trace_id, decision.mode, len(plan.tasks))
 
-            # Phase 0 规格落盘：仅 pipeline（复杂多步）写可评审的 spec 文档（SDD 第一类 artifact）
+            # Phase 0 计划落盘：仅 pipeline（复杂多步）写可评审的 spec 文档（SDD 第一类 artifact）
             if decision.mode == "pipeline":
-                from app.services import spec_store
+                from app.services import plan_store
 
-                spec_store.write_spec(
+                plan_store.write_plan(
                     workspace_path,
                     plan,
                     conversation_id=conversation_id,
@@ -909,7 +909,7 @@ class OrchestratorEngine(IMessageHandler):
                     instructions=content,
                 )
                 # item 2：同时落 Spec Kit 三件套（requirements/design/tasks.md）供文件级评审/逐条编辑
-                spec_store.write_spec_triplet(
+                plan_store.write_plan_triplet(
                     workspace_path,
                     plan,
                     conversation_id=conversation_id,

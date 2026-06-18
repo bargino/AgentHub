@@ -253,8 +253,8 @@ class PlanReviseIn(CamelModel):
     feedback: str
 
 
-class SpecFileOut(CamelModel):
-    """item 2：规格文件元信息（Spec Kit 三件套 + 合并版）。"""
+class PlanFileOut(CamelModel):
+    """item 2：计划文件元信息（Spec Kit 三件套 + 合并版）。"""
 
     name: str
     path: str
@@ -262,8 +262,8 @@ class SpecFileOut(CamelModel):
     mtime: str
 
 
-class SpecFileWrite(CamelModel):
-    """item 2：规格文件级逐条编辑写入。"""
+class PlanFileWrite(CamelModel):
+    """item 2：计划文件级逐条编辑写入。"""
 
     path: str
     content: str

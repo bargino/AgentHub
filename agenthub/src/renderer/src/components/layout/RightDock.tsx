@@ -6,12 +6,12 @@ import { ReviewCenter } from '../diff/ReviewCenter'
 import { TaskPanel } from '../task/TaskPanel'
 import { GitPanel } from '../git/GitPanel'
 import { PreviewPanel } from '../preview/PreviewPanel'
-import { SpecPanel } from '../spec/SpecPanel'
+import { PlanPanel } from '../plan/PlanPanel'
 
 const TABS: { key: RightTab; icon: LucideIcon; labelKey: string }[] = [
   { key: 'review', icon: FileDiff, labelKey: 'rightDock.review' },
   { key: 'task', icon: ListTodo, labelKey: 'rightDock.task' },
-  { key: 'spec', icon: FileText, labelKey: 'rightDock.spec' },
+  { key: 'plan', icon: FileText, labelKey: 'rightDock.plan' },
   { key: 'git', icon: Files, labelKey: 'rightDock.git' },
   { key: 'preview', icon: Monitor, labelKey: 'rightDock.preview' }
 ]
@@ -85,7 +85,7 @@ export function RightDock(): React.JSX.Element | null {
       <div className="flex-1 min-h-0">
         {rightTab === 'review' && <ReviewCenter />}
         {rightTab === 'task' && <TaskPanel />}
-        {rightTab === 'spec' && <SpecPanel />}
+        {rightTab === 'plan' && <PlanPanel />}
         {rightTab === 'git' && <GitPanel />}
         {rightTab === 'preview' && <PreviewPanel />}
       </div>
