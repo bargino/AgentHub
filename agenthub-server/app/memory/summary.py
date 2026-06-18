@@ -5,10 +5,11 @@
 （category="conversation_summary"，key=conversation_id），
 经 context_builder / engine 作为前缀注入后续上下文。
 
-#2 hybrid memory 后只保留会话滚动摘要（compaction 层）；项目级知识不再由此
-蒸馏写库，改由 #9a 文档记忆（AGENTHUB.md / progress.md）按需沉淀。
-parse_summary_output 仍保留对 ===MEMORY=== 双产出的兼容解析（供历史数据/单测）。
-LLM 不可用时回退到简单截断策略。
+同一次蒸馏同时产出两类记忆：①会话滚动摘要（compaction 层，category=conversation_summary，
+key=conversation_id）；②项目级长期记忆（tech_stack / conventions / decision），经
+===MEMORY=== 双产出由 parse_summary_output 解析后写入 project_memory，再由
+render_project_context 跨会话注入规划器与执行 Agent 上下文；与 #9a 文档记忆
+（AGENTHUB.md / progress.md）互补。LLM 不可用时回退到简单截断（不产出项目事实）。
 """
 
 from __future__ import annotations
@@ -58,7 +59,17 @@ SUMMARY_PROMPT = """请将以下对话历史（含可能存在的既往摘要）
 对话历史：
 {history}
 
-只输出模板正文，不要任何额外前缀或解释。"""
+先输出上面的结构化摘要模板正文。随后，仅当本段对话中确认了\
+**跨会话仍然有用的耐久项目事实**（技术栈/架构、稳定的项目约定、重要且不易改变的决策），\
+再另起一行追加一个记忆块（无则整块省略，不要输出标记）：
+===MEMORY===
+[{{"category": "tech_stack", "key": "简短标识", "value": "事实内容"}}]
+记忆块要求：
+- category 只能是 tech_stack、conventions、decision 之一；
+- 只记跨会话耐久、稳定的事实，不记一次性临时状态、本轮待办或会话进度；
+- 最多 5 条，每条 value ≤ 200 字，整体必须是合法 JSON 数组；
+- 没有值得长期保留的事实就省略整个记忆块。
+摘要模板正文与记忆块之外，不要任何其它解释或前缀。"""
 
 
 def parse_summary_output(raw: str) -> tuple[str, list[dict[str, str]]]:
@@ -185,9 +196,9 @@ async def compress_if_needed(
     if old_summary:
         entries.insert(0, MemoryEntry(role="system", content=f"[既往摘要] {old_summary}"))
 
-    # #2 hybrid memory：只保留会话滚动摘要（compaction 层），不再蒸馏
-    # tech_stack/conventions/decision 写库（项目级知识改由 #9a 文档记忆按需沉淀）
-    summary, _ = await summarize_entries(entries)
+    # 同一次蒸馏双产出：会话滚动摘要（compaction 层）+ ④ 项目级长期记忆
+    # （tech_stack/conventions/decision），后者跨会话注入规划器与执行 Agent。
+    summary, memory_items = await summarize_entries(entries)
     await project_memory.remember(
         session,
         project_name,
@@ -195,4 +206,12 @@ async def compress_if_needed(
         key=conversation_id,
         value=summary,
     )
+    for item in memory_items:
+        await project_memory.remember(
+            session,
+            project_name,
+            category=item["category"],
+            key=item["key"],
+            value=item["value"],
+        )
     return True

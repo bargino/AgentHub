@@ -72,8 +72,20 @@ async def recall(
     return {row.key: row.value for row in result.scalars()}
 
 
+# 注入上限：项目知识会随会话累积，按「最近更新优先」截断，防撑爆上下文。
+_RENDER_MAX_ITEMS = 24
+_RENDER_CHAR_BUDGET = 3000
+_RENDER_VALUE_LIMIT = 500
+_CATEGORY_LABELS = {
+    "tech_stack": "技术栈",
+    "structure_summary": "项目结构",
+    "conventions": "项目约定",
+    "decision": "关键决策",
+}
+
+
 async def render_project_context(session: AsyncSession, project_name: str) -> str:
-    """渲染项目记忆为提示词文本块。
+    """渲染项目记忆为提示词文本块（按类目分组，最近更新优先，受条数/字符上限约束）。
 
     会话摘要（conversation_summary）按会话维度由 summary.get_conversation_summary
     单独注入，此处排除，避免 A 会话摘要泄漏进 B 会话上下文。
@@ -82,12 +94,22 @@ async def render_project_context(session: AsyncSession, project_name: str) -> st
         select(ProjectKnowledge)
         .where(ProjectKnowledge.project_name == project_name)
         .where(ProjectKnowledge.category != "conversation_summary")
+        .order_by(ProjectKnowledge.updated_at.desc())
+        .limit(_RENDER_MAX_ITEMS)
     )
-    knowledge = {row.key: row.value for row in result.scalars()}
-    if not knowledge:
+    # 按 row 迭代（非按 key 收敛）：同 key 跨类目（如 tech_stack 与 decision）不会互相覆盖丢失。
+    grouped: dict[str, list[str]] = {}
+    used = 0
+    for row in result.scalars():
+        line = f"- {row.key}: {(row.value or '')[:_RENDER_VALUE_LIMIT]}"
+        used += len(line)
+        if used > _RENDER_CHAR_BUDGET:
+            break
+        grouped.setdefault(row.category, []).append(line)
+    if not grouped:
         return ""
     lines = [f"## 项目知识（{project_name}）"]
-    for key, value in knowledge.items():
-        snippet = value[:500]
-        lines.append(f"- {key}: {snippet}")
+    for category, items in grouped.items():
+        lines.append(f"### {_CATEGORY_LABELS.get(category, category)}")
+        lines.extend(items)
     return "\n".join(lines)

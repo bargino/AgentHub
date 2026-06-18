@@ -15,7 +15,7 @@ from typing import Optional
 
 from app.core.message_handler import IMessageHandler
 from app.db.engine import get_session_factory
-from app.memory import conversation_memory, progress_log, summary, token_meter
+from app.memory import conversation_memory, progress_log, project_memory, summary, token_meter
 from app.orchestrator.task_executor import ExecutionState, execute_plan
 from app.orchestrator.task_planner import Decision, PlannedTask, TaskPlan, decide
 from app.services import conversation as conversation_service
@@ -399,11 +399,15 @@ async def _run_failure_replan(
             )
             if summary_text:
                 conv_context = f"[早期对话摘要]\n{summary_text}\n\n{conv_context}"
+            # ④ 跨会话项目知识（蒸馏沉淀）注入重规划，使补救计划同样对齐既有约定/决策
+            project_knowledge = await project_memory.render_project_context(
+                session, project_name
+            )
 
         decision = await decide(
             replan_instructions,
             conversation_context=conv_context,
-            project_context="",
+            project_context=project_knowledge,
             member_ids=member_ids,
             collab_intensity=collab_intensity,
         )
@@ -798,10 +802,17 @@ class OrchestratorEngine(IMessageHandler):
                         )
                         if summary_text:
                             conv_context = f"[早期对话摘要]\n{summary_text}\n\n{conv_context}"
+                        # ④ 跨会话项目知识（蒸馏沉淀）一并喂规划器，使计划对齐既有约定/决策
+                        project_knowledge = await project_memory.render_project_context(
+                            session, project_name
+                        )
                     # Phase 4：把项目宪法（AGENTHUB.md + 全局规则）喂给规划器，使计划对齐宪法
                     from app.orchestrator.context_builder import load_custom_rules
 
                     constitution = load_custom_rules(workspace_path)
+                    project_context = "\n\n".join(
+                        p for p in (constitution, project_knowledge) if p
+                    )
                     # Phase 1a 澄清轮数上限：近窗口已达上限则本轮禁止再 clarify（强制出计划）
                     allow_clarify = (
                         await _recent_clarify_count(factory, conversation_id)
@@ -809,7 +820,7 @@ class OrchestratorEngine(IMessageHandler):
                     decision = await decide(
                         content,
                         conversation_context=conv_context,
-                        project_context=constitution,
+                        project_context=project_context,
                         member_ids=member_ids,
                         collab_intensity=collab_intensity,
                         allow_clarify=allow_clarify,

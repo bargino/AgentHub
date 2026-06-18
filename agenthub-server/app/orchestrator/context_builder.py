@@ -12,7 +12,7 @@ from app.adapters.base import AdapterContext, UnifiedApprovalMode, UnifiedSandbo
 from app.config import resolve_mcp_servers
 from app.db.engine import get_data_dir
 from app.db.models import AgentRecord
-from app.memory import conversation_memory, summary, task_memory, token_meter
+from app.memory import conversation_memory, project_memory, summary, task_memory, token_meter
 from app.orchestrator import context_meter
 from app.orchestrator.prompts import (
     AgentSpec,
@@ -291,9 +291,15 @@ async def build_context(
     if conv_rules.strip():
         group_rules = f"## 群规则（本会话）\n{conv_rules.strip()[:_RULES_CHAR_LIMIT]}"
         custom_rules = f"{custom_rules}\n\n{group_rules}" if custom_rules else group_rules
-    # ① 稳定前缀（系统提示 + 安全约束 + 规则/宪法/群规则，按会话稳定）→ system_prompt
+    # ④ 跨会话项目知识（tech_stack/conventions/decision，由 summary 蒸馏沉淀）：慢变、
+    # 对所有角色有用，放稳定前缀享 prompt 缓存；_as_data 包裹隔离（蒸馏自对话，防注入）。
+    project_knowledge = await project_memory.render_project_context(session, project_name)
+    project_block = _as_data("跨会话项目记忆", project_knowledge) if project_knowledge else ""
+    # ① 稳定前缀（系统提示 + 安全约束 + 规则/宪法/群规则 + 项目知识，按会话稳定）→ system_prompt
     # claude 走 preset+append 享自动 prompt 缓存；codex 前置拼到 turn 内容（OpenAI 自动 prefix 缓存）
-    stable_prefix = "\n\n".join(p for p in (system, _SAFETY_NOTE, custom_rules) if p)
+    stable_prefix = "\n\n".join(
+        p for p in (system, _SAFETY_NOTE, custom_rules, project_block) if p
+    )
     # #2 hybrid memory：跨会话进展（progress.md，每轮可能变）放可变侧，与本轮 body 一起进 instructions
     progress = _read_rules_file(
         Path(workspace_path) / ".agenthub" / "progress.md",
@@ -309,6 +315,7 @@ async def build_context(
             "system": system,
             "safety": _SAFETY_NOTE,
             "rules+constitution": custom_rules,
+            "project_knowledge": project_block,
             "progress(xsession)": progress,
             **dict(body_sections),
         },
