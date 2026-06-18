@@ -69,17 +69,39 @@ def _read_rules_file(path: Path, title: str) -> str:
     return ""
 
 
+# G：规则文件按 mtime 缓存（workspace_path -> ((global_mtime, proj_mtime), text)）
+# 避免 clarify 多轮 decide / 每任务 build_context 重复读盘；文件变更时签名变化自动失效。
+_RULES_CACHE: dict[str, tuple[tuple[float, float], str]] = {}
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime if path.is_file() else 0.0
+    except OSError:
+        return 0.0
+
+
 def load_custom_rules(workspace_path: str) -> str:
     """AgentHub 自有规则（对所有 adapter 生效，与 SDK 自身规则机制互补）：
 
     - 全局：~/.agenthub/rules.md
     - 工作区：{workspace}/AGENTHUB.md（随项目复制/worktree 进入会话）
+
+    G：按两文件 mtime 缓存，命中则零读盘。
     """
+    global_p = get_data_dir() / "rules.md"
+    proj_p = Path(workspace_path) / "AGENTHUB.md"
+    sig = (_mtime(global_p), _mtime(proj_p))
+    cached = _RULES_CACHE.get(workspace_path)
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     sections = [
-        _read_rules_file(get_data_dir() / "rules.md", "全局规则（AgentHub）"),
-        _read_rules_file(Path(workspace_path) / "AGENTHUB.md", "项目规则（AGENTHUB.md）"),
+        _read_rules_file(global_p, "全局规则（AgentHub）"),
+        _read_rules_file(proj_p, "项目规则（AGENTHUB.md）"),
     ]
-    return "\n\n".join(s for s in sections if s)
+    text = "\n\n".join(s for s in sections if s)
+    _RULES_CACHE[workspace_path] = (sig, text)
+    return text
 
 
 def _role_policy(
@@ -123,6 +145,25 @@ async def _get_agent_record(
         .limit(1)
     )
     return result.scalars().first()
+
+
+async def _collect_acceptance_text(session: AsyncSession, conversation_id: str) -> str:
+    """汇总本会话各任务的 EARS 验收标准为复审核对清单（Phase 3：规格=评测）。
+
+    无显式验收标准时回退「按原始需求审查」，不强制 reviewer 编造标准。
+    """
+    from app.db.models import Task
+
+    rows = (
+        await session.execute(
+            select(Task.title, Task.acceptance)
+            .where(Task.conversation_id == conversation_id)
+            .where(Task.acceptance != "")
+        )
+    ).all()
+    if not rows:
+        return "（本计划未给出显式验收标准，按原始需求审查）"
+    return "\n".join(f"- {title}：{acc}" for title, acc in rows)
 
 
 async def build_context(
@@ -209,8 +250,10 @@ async def build_context(
     )
 
     if task.agent == "reviewer":
+        acceptance_text = await _collect_acceptance_text(session, conversation_id)
         body = REVIEWER_USER_TEMPLATE.format(
             instructions=user_instructions,
+            acceptance=acceptance_text,
             diff_text=task_text or "（暂无 Diff）",
         )
     elif task.agent == "planner":
@@ -220,7 +263,11 @@ async def build_context(
             upstream_results=upstream_text,
         )
     else:
-        sections = [f"## 当前任务\n{task.title}", f"## 用户需求\n{user_instructions}"]
+        sections = [f"## 当前任务\n{task.title}"]
+        # B：把本任务的 EARS 验收标准注入实现者上下文，让其对标验收写代码（不只 reviewer 事后查）
+        if getattr(task, "acceptance", ""):
+            sections.append(f"## 本任务验收标准（实现必须满足）\n{task.acceptance}")
+        sections.append(f"## 用户需求\n{user_instructions}")
         if upstream_text != "（无）":
             sections.append(_as_data("上游任务结果", upstream_text))
         if blackboard:
@@ -235,20 +282,19 @@ async def build_context(
             sections.append(_as_data(history_title, conv_text))
         body = "\n\n".join(sections)
 
-    rules = load_custom_rules(workspace_path)
-    # #2 hybrid memory：预加载跨会话进展（progress.md，对标 claude-progress.txt），
-    # 与 AGENTHUB.md 同属稳定前缀；项目细节由 agent 用 Glob/Grep/Read 按需探索
+    custom_rules = load_custom_rules(workspace_path)
+    if conv_rules.strip():
+        group_rules = f"## 群规则（本会话）\n{conv_rules.strip()[:_RULES_CHAR_LIMIT]}"
+        custom_rules = f"{custom_rules}\n\n{group_rules}" if custom_rules else group_rules
+    # ① 稳定前缀（系统提示 + 安全约束 + 规则/宪法/群规则，按会话稳定）→ system_prompt
+    # claude 走 preset+append 享自动 prompt 缓存；codex 前置拼到 turn 内容（OpenAI 自动 prefix 缓存）
+    stable_prefix = "\n\n".join(p for p in (system, _SAFETY_NOTE, custom_rules) if p)
+    # #2 hybrid memory：跨会话进展（progress.md，每轮可能变）放可变侧，与本轮 body 一起进 instructions
     progress = _read_rules_file(
         Path(workspace_path) / ".agenthub" / "progress.md",
         "跨会话进展（.agenthub/progress.md）",
     )
-    if progress:
-        rules = f"{rules}\n\n{progress}" if rules else progress
-    if conv_rules.strip():
-        group_rules = f"## 群规则（本会话）\n{conv_rules.strip()[:_RULES_CHAR_LIMIT]}"
-        rules = f"{rules}\n\n{group_rules}" if rules else group_rules
-    parts = [p for p in (system, _SAFETY_NOTE, rules, body) if p]
-    instructions = "\n\n".join(parts)
+    instructions = "\n\n".join(p for p in (progress, body) if p)
     approval_mode, sandbox_level = _role_policy(
         task.agent, record.capabilities if record else None
     )
@@ -277,6 +323,7 @@ async def build_context(
 
     return AdapterContext(
         instructions=instructions,
+        system_prompt=stable_prefix or None,
         workspace_path=workspace_path,
         approval_mode=approval_mode,
         sandbox_level=sandbox_level,

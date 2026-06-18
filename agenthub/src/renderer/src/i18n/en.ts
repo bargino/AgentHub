@@ -56,8 +56,17 @@ export const en: Dict = {
   rightDock: {
     review: 'Review',
     task: 'Tasks',
+    spec: 'Specs',
     git: 'Git',
     preview: 'Preview'
+  },
+  spec: {
+    noConversation: 'Pick a session to view its specs',
+    empty: 'No specs yet (generated for multi-step pipelines)',
+    refresh: 'Refresh',
+    save: 'Save',
+    saved: 'Saved',
+    saveFailed: 'Save failed'
   },
   review: {
     title: 'Review queue',
@@ -240,6 +249,8 @@ export const en: Dict = {
       group: 'Group settings',
       taskTitle: 'Task panel',
       task: 'Tasks',
+      specTitle: 'Spec docs (requirements / design / tasks)',
+      spec: 'Specs',
       filesTitle: 'Workspace file changes & commit history',
       files: 'Files',
       diffTitle: 'View diff',
@@ -265,6 +276,7 @@ export const en: Dict = {
       contextTitle: 'Context used {used} / {window} tokens',
       context: 'Context',
       stop: 'Stop this run',
+      send: 'Send',
       roleDesc: {
         orchestrator: 'Requirement breakdown & task orchestration',
         planner: 'Analyze project structure & plan',

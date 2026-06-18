@@ -137,6 +137,14 @@ class ClaudeCodeAdapter(ICodeAdapter):
             skills=skills,
             mcp_servers=mcp_servers,
         )
+        # ① 稳定前缀走 claude_code 预设 + append：保留 Claude Code 默认系统提示（工具/编码行为不变），
+        # 仅追加稳定前缀（角色/安全/规则/宪法）；该前缀字节稳定 → 命中自动 prompt 缓存，降延迟与成本
+        if ctx.system_prompt:
+            options.system_prompt = {
+                "type": "preset",
+                "preset": "claude_code",
+                "append": ctx.system_prompt,
+            }
 
         yield UnifiedEvent(type="started", data={}, adapter=self.name)
 

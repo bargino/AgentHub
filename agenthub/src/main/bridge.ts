@@ -133,7 +133,7 @@ export async function startBridge(): Promise<void> {
     const detail = err instanceof Error ? err.message : String(err)
     console.error('[bridge] 解析 python 失败:', err)
     emitError(
-      `无法定位后端 Python 运行环境（${detail}）。请确认已安装 conda 且存在 \`agent\` 环境，或设置 AGENTHUB_PYTHON 指向可用的 python 可执行文件。`
+      `无法定位后端 Python 运行环境（${detail}）。请设置 AGENTHUB_PYTHON 指向 python 可执行文件，或用 AGENTHUB_CONDA_ENV 指定 conda 环境名，或在已激活目标环境的终端中启动。`
     )
     setStatus('disconnected')
     return

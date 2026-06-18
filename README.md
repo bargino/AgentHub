@@ -118,7 +118,7 @@ flowchart TB
 
 - **Node.js** ≥ 18（建议 20 LTS）+ npm
 - **Python** 3.11
-- **Conda**（推荐）：后端依赖默认装在名为 `agent` 的 conda 环境；客户端按 `conda info --base` 下的 `envs/agent` 定位解释器。不用 conda 时用环境变量 `AGENTHUB_PYTHON` 指向任意可用 python。
+- **Conda**（推荐）：为后端依赖建一个 conda 环境（名字自取）。客户端解释器解析优先级：`AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名，定位 `conda info --base` 下的 `envs/<名字>`）> PATH 上的 `python` / `python3`。从已激活该环境的终端启动时 PATH 即指向该环境，无需额外配置。
 - 至少一个 Agent SDK（`claude-agent-sdk` 或 `openai-codex`）；运行时自动探测可用性，均不可用时降级到 **Mock**。
 
 ### 1️⃣ 后端（agenthub-server）
@@ -126,7 +126,7 @@ flowchart TB
 ```bash
 cd agenthub-server
 
-# 推荐：conda（与客户端默认解释器解析一致）
+# 推荐：conda（环境名自取，下例用 agent）
 conda create -n <env> python=3.11 -y && conda activate <env>
 pip install poetry && poetry install --extras all     # 或：pip install -e ".[all]"
 ```
@@ -139,9 +139,9 @@ pip install poetry && poetry install --extras all     # 或：pip install -e ".[
 cd agenthub
 npm install
 
-# 若后端不在默认 conda `agent` 环境，先指定解释器：
-#   macOS/Linux : export AGENTHUB_PYTHON=/path/to/python
-#   Windows     : $env:AGENTHUB_PYTHON="C:\path\to\python.exe"
+# 指定后端解释器（任选其一；或先 `conda activate <env>` 后再 npm run dev 走 PATH）：
+#   按环境名 : export AGENTHUB_CONDA_ENV=<env>           # Windows: $env:AGENTHUB_CONDA_ENV="<env>"
+#   按路径   : export AGENTHUB_PYTHON=/path/to/python    # Windows: $env:AGENTHUB_PYTHON="C:\path\to\python.exe"
 
 npm run dev          # 启动开发态客户端；会自动拉起后端 stdio 桥
 ```

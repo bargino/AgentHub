@@ -119,6 +119,8 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
     depends_on: Mapped[list] = mapped_column(JSON, default=list)
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Phase 2：EARS 验收标准（"当 X，系统应 Y"），来自 planner，供 spec / reviewer / eval 对标
+    acceptance: Mapped[str] = mapped_column(Text, default="")
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

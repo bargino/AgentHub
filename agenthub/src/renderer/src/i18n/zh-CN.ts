@@ -55,8 +55,17 @@ export const zhCN: Dict = {
   rightDock: {
     review: '审查',
     task: '任务',
+    spec: '规格',
     git: 'Git',
     preview: '预览'
+  },
+  spec: {
+    noConversation: '选择一个会话查看其规格',
+    empty: '暂无规格（多步 pipeline 任务才会生成）',
+    refresh: '刷新',
+    save: '保存',
+    saved: '已保存',
+    saveFailed: '保存失败'
   },
   review: {
     title: '审查队列',
@@ -237,6 +246,8 @@ export const zhCN: Dict = {
       group: '群设置',
       taskTitle: '任务面板',
       task: '任务',
+      specTitle: '规格文档（需求 / 设计 / 任务三件套）',
+      spec: '规格',
       filesTitle: '工作区文件变更与提交历史',
       files: '文件',
       diffTitle: 'Diff 查看',
@@ -262,6 +273,7 @@ export const zhCN: Dict = {
       contextTitle: '上下文已用 {used} / {window} tokens',
       context: '上下文',
       stop: '停止本轮执行',
+      send: '发送',
       roleDesc: {
         orchestrator: '需求拆解与任务编排',
         planner: '分析项目结构与方案',

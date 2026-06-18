@@ -84,6 +84,7 @@ class TaskOut(CamelModel):
     agent_role: AgentRole
     status: TaskStatus = "pending"
     depends_on: list[str] = Field(default_factory=list)
+    acceptance: str = ""
     result: Optional[str] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
@@ -244,6 +245,28 @@ class RollbackIn(CamelModel):
     """回退对话：删除该消息（含）之后的全部消息。"""
 
     message_id: str
+
+
+class PlanReviseIn(CamelModel):
+    """A：计划修改门禁——用户对待确认计划的修改意见。"""
+
+    feedback: str
+
+
+class SpecFileOut(CamelModel):
+    """item 2：规格文件元信息（Spec Kit 三件套 + 合并版）。"""
+
+    name: str
+    path: str
+    size: int
+    mtime: str
+
+
+class SpecFileWrite(CamelModel):
+    """item 2：规格文件级逐条编辑写入。"""
+
+    path: str
+    content: str
 
 
 class ContextUsageOut(CamelModel):

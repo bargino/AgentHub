@@ -7,6 +7,7 @@ import type { Conversation } from '../../types'
 import { CountBadge } from '../ui/Badge'
 import { GroupAvatar } from '../ui/GroupAvatar'
 import { StatusDot } from '../ui/StatusDot'
+import { Tooltip } from '../ui/Tooltip'
 import { NewProjectModal } from './NewProjectModal'
 
 interface MenuState {
@@ -130,22 +131,30 @@ function ConvItem({
 }): React.JSX.Element {
   const agents = useAppStore((s) => s.agents)
   const memberRoles = resolveMembers(conv, agents).map((a) => a.role)
+  const activate = (): void => {
+    void useAppStore.getState().setActiveConversation(conv.id)
+  }
   return (
     <div
-      onClick={() => useAppStore.getState().setActiveConversation(conv.id)}
+      role="button"
+      tabIndex={0}
+      aria-label={conv.title}
+      aria-current={active ? 'true' : undefined}
+      onClick={activate}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          activate()
+        }
+      }}
       onContextMenu={(e) => onContextMenu(e, conv)}
-      className="relative flex items-center gap-3 mx-2 my-0.5 px-3 h-[60px] cursor-pointer rounded-[var(--radius-lg)]"
+      data-active={active}
+      className="conv-item focus-ring relative flex items-center gap-3 mx-2 my-0.5 px-3 h-[60px] cursor-pointer rounded-[var(--radius-lg)]"
       style={{
         background: active
           ? 'linear-gradient(90deg, var(--color-brand-bg) 0%, transparent 130%)'
           : undefined,
         transition: 'background var(--transition-fast)'
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = 'var(--color-bg-spotlight)'
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = ''
       }}
     >
       {/* active 品牌色竖条 */}
@@ -265,19 +274,21 @@ export function ConversationList(): React.JSX.Element {
           <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
             {tr('conv.title')}
           </span>
-          <button
-            onClick={() => useAppStore.getState().setNewProjectOpen(true)}
-            className="btn-press w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center text-white"
-            style={{
-              background: 'var(--gradient-brand)',
-              boxShadow: '0 2px 8px rgba(37, 99, 235, 0.3)',
-              border: 'none',
-              cursor: 'pointer'
-            }}
-            title={tr('conv.newProject')}
-          >
-            <Plus size={15} />
-          </button>
+          <Tooltip content={tr('conv.newProject')} placement="bottom">
+            <button
+              onClick={() => useAppStore.getState().setNewProjectOpen(true)}
+              className="btn-press w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center text-white"
+              style={{
+                background: 'var(--gradient-brand)',
+                boxShadow: 'var(--shadow-brand)',
+                border: 'none',
+                cursor: 'pointer'
+              }}
+              aria-label={tr('conv.newProject')}
+            >
+              <Plus size={15} />
+            </button>
+          </Tooltip>
         </div>
 
         <div className="relative">

@@ -1,3 +1,5 @@
+import { useT } from '../../i18n'
+
 type StatusType = 'online' | 'running' | 'idle' | 'error' | 'offline'
 
 interface StatusDotProps {
@@ -23,13 +25,21 @@ export function StatusDot({
   label,
   className = ''
 }: StatusDotProps): React.JSX.Element {
+  const tr = useT()
   const cfg = STATUS_CONFIG[status]
   const d = DOT_SIZE[size]
+  // 文本替代：状态不只靠颜色传达。无可见文字时给圆点加 role/aria-label/title；
+  // 有可见文字时圆点设为装饰（aria-hidden），由文字承载语义。running 仍用脉冲作非颜色线索。
+  const statusText = tr(cfg.labelKey)
 
   return (
     <span className={`inline-flex items-center gap-1.5 ${className}`}>
       <span
         className={cfg.pulse ? 'animate-pulse-soft' : ''}
+        title={label ?? statusText}
+        role={label === undefined ? 'img' : undefined}
+        aria-label={label === undefined ? statusText : undefined}
+        aria-hidden={label === undefined ? undefined : true}
         style={{
           width: d,
           height: d,

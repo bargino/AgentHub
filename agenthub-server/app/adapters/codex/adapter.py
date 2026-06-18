@@ -362,16 +362,23 @@ class CodexAdapter(ICodeAdapter):
                     adapter=self.name,
                 ))
 
+                # ① 稳定前缀前置拼到 turn 内容（保持前缀字节稳定，享 OpenAI 自动 prefix 缓存）；
+                # codex 无独立 system 入参，故并入正文，总内容与未拆分时一致
+                prompt = (
+                    f"{ctx.system_prompt}\n\n{ctx.instructions}"
+                    if ctx.system_prompt
+                    else ctx.instructions
+                )
                 # 多模态：有图片附件时 input_items=[text + localImage...]（turn_start 接
                 # list[dict]，见 openai_codex._inputs），否则保持纯文本字符串
                 codex_items = to_codex_items(ctx.attachments)
                 if codex_items:
                     turn = client.turn_start(
                         thread_id,
-                        [{"type": "text", "text": ctx.instructions}, *codex_items],
+                        [{"type": "text", "text": prompt}, *codex_items],
                     )
                 else:
-                    turn = client.turn_start(thread_id, ctx.instructions)
+                    turn = client.turn_start(thread_id, prompt)
                 turn_id = turn.turn.id
                 active.turn_id = turn_id
 

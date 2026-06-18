@@ -93,6 +93,25 @@ export async function stopConversation(conversationId: string): Promise<{ stoppe
   return postJson<{ stopped: boolean }>(`/conversations/${conversationId}/stop`)
 }
 
+/** 计划确认门禁（Phase 1b）：批准/拒绝待执行的 pipeline 任务计划 */
+export async function confirmPlan(
+  conversationId: string,
+  approved: boolean
+): Promise<{ ok: boolean; approved: boolean }> {
+  return postJson<{ ok: boolean; approved: boolean }>(
+    `/conversations/${conversationId}/plan/confirm`,
+    { approved }
+  )
+}
+
+/** 计划修改门禁（A）：提交修改意见，后端取消旧计划并据此重新规划 */
+export async function revisePlan(
+  conversationId: string,
+  feedback: string
+): Promise<{ ok: boolean }> {
+  return postJson<{ ok: boolean }>(`/conversations/${conversationId}/plan/revise`, { feedback })
+}
+
 export async function rollbackConversation(
   conversationId: string,
   messageId: string
@@ -100,6 +119,42 @@ export async function rollbackConversation(
   return postJson<{ deleted: number }>(`/conversations/${conversationId}/rollback`, {
     messageId
   })
+}
+
+// ---- 规格（spec-driven · Spec Kit 三件套 + 合并版，item 2）----
+export interface SpecFile {
+  name: string
+  path: string
+  size: number
+  mtime: string
+}
+
+/** 列出该会话的规格文件（无 workspace 时返回 []） */
+export async function listSpecs(conversationId: string): Promise<SpecFile[]> {
+  return getJson<SpecFile[]>(`/conversations/${conversationId}/specs`)
+}
+
+/** 读取单个规格文件内容（路径限定在 specs 根内） */
+export async function getSpecFile(
+  conversationId: string,
+  path: string
+): Promise<{ path: string; content: string }> {
+  const params = new URLSearchParams({ path })
+  return getJson<{ path: string; content: string }>(
+    `/conversations/${conversationId}/specs/file?${params.toString()}`
+  )
+}
+
+/** 保存单个规格文件（文件级逐条编辑落盘） */
+export async function saveSpecFile(
+  conversationId: string,
+  path: string,
+  content: string
+): Promise<{ ok: boolean; path: string }> {
+  return patchJson<{ ok: boolean; path: string }>(
+    `/conversations/${conversationId}/specs/file`,
+    { path, content }
+  )
 }
 
 export interface ContextUsage {

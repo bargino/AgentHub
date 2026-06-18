@@ -48,6 +48,22 @@
   --conv-list-width: 280px;
   --right-panel-width: 380px;
 
+  /* 聊天气泡最大行宽：宽屏下封顶以保可读行长，窄屏仍由百分比生效 */
+  --bubble-max-user: 600px;
+  --bubble-max-agent: 720px;
+
+  /* IconNav 侧边栏（始终深色 chrome，独立于明暗主题；收口此前硬编码值） */
+  --nav-bg: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  --nav-border: rgba(255, 255, 255, 0.06);
+  --nav-indicator: #60a5fa;
+  --nav-item-color: rgba(255, 255, 255, 0.55);
+  --nav-item-color-active: #ffffff;
+  --nav-item-bg-active: rgba(255, 255, 255, 0.1);
+  --nav-item-bg-hover: rgba(255, 255, 255, 0.06);
+  --nav-avatar-bg: rgba(255, 255, 255, 0.08);
+  --nav-avatar-border: rgba(255, 255, 255, 0.12);
+  --nav-avatar-color: rgba(255, 255, 255, 0.75);
+
   /* Radius */
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -61,6 +77,10 @@
   --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
   --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
   --shadow-float: 0 12px 32px rgba(15, 23, 42, 0.12);
+  /* 品牌/错误辉光（收口此前散落的 rgba 硬编码 boxShadow） */
+  --shadow-brand: 0 2px 8px rgba(37, 99, 235, 0.3);
+  --shadow-brand-lg: 0 4px 14px rgba(37, 99, 235, 0.4);
+  --shadow-error: 0 2px 8px rgba(239, 68, 68, 0.35);
 
   /* Motion（动效服务于状态反馈，每个动画 ≤320ms） */
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
@@ -463,6 +483,18 @@ div:active > .resize-handle-line {
 .nav-item:hover .nav-item-icon {
   transform: scale(1.08);
 }
+/* 导航项 hover 背景（非 active 项；active 项由内联 active 背景按特异性覆盖） */
+.nav-item:hover {
+  background: var(--nav-item-bg-hover);
+}
+/* 会话项 hover 背景（替代原 JS onMouseEnter/Leave；active 项由内联渐变覆盖） */
+.conv-item[data-active='false']:hover {
+  background: var(--color-bg-spotlight);
+}
+/* 按钮 hover 上浮微反馈（替代原 JS 内联 transform；按压缩放由全局 :active 接管） */
+.hover-lift:not(:disabled):hover {
+  transform: translateY(-1px);
+}
 
 /* frameless 标题栏拖拽区 */
 .titlebar {
@@ -583,7 +615,7 @@ div:active > .resize-handle-line {
   width: 40px;
   height: 22px;
   border-radius: var(--radius-full);
-  cursor: pointer;
+  cursor: default;
   transition: background var(--transition-fast);
   flex-shrink: 0;
 }
@@ -622,7 +654,7 @@ div:active > .resize-handle-line {
   font-weight: 500;
   border-radius: var(--radius-md);
   border: none;
-  cursor: pointer;
+  cursor: default;
   color: var(--color-text-inverse);
   background: var(--color-brand);
   transition: background var(--transition-fast);
@@ -636,7 +668,7 @@ div:active > .resize-handle-line {
 .btn-ghost {
   border: none;
   background: transparent;
-  cursor: pointer;
+  cursor: default;
   transition:
     background var(--transition-fast),
     color var(--transition-fast);
@@ -650,7 +682,7 @@ div:active > .resize-handle-line {
   border: 1px solid var(--color-error);
   color: var(--color-error);
   background: transparent;
-  cursor: pointer;
+  cursor: default;
   transition: background var(--transition-fast);
 }
 .btn-outline-error:hover {
@@ -664,7 +696,7 @@ div:active > .resize-handle-line {
   font-weight: 500;
   border-radius: var(--radius-md);
   border: none;
-  cursor: pointer;
+  cursor: default;
   color: var(--color-text-inverse);
   background: var(--color-success);
   transition: filter var(--transition-fast);
@@ -679,7 +711,7 @@ div:active > .resize-handle-line {
   border: 1px solid var(--color-success);
   color: var(--color-success);
   background: transparent;
-  cursor: pointer;
+  cursor: default;
   transition: background var(--transition-fast);
 }
 .btn-outline-success:hover {
@@ -866,7 +898,7 @@ div:active > .resize-handle-line {
   border-radius: var(--radius-sm);
   background: transparent;
   color: rgba(255, 255, 255, 0.45);
-  cursor: pointer;
+  cursor: default;
   opacity: 0;
   transition:
     opacity var(--transition-fast),
@@ -1033,4 +1065,26 @@ select {
 .animate-pop {
   animation: menuPop var(--duration-base) var(--ease-spring);
   transform-origin: top center;
+}
+
+/* 顶栏（ChatWindow header）容器查询：聊天区被右侧面板挤窄时，
+   工具栏文字标签折叠为纯图标（保留 title 悬浮提示），
+   避免 shrink-0 工具栏溢出覆盖到相邻右侧面板造成重叠错乱。 */
+.chat-header {
+  container-type: inline-size;
+}
+@container (max-width: 600px) {
+  .chat-header .chat-toolbar-label {
+    display: none;
+  }
+}
+
+/* 桌面原生观感：可点元素 hover 不再切换为手型光标，统一保持系统默认箭头。
+   覆盖两类外部来源——Tailwind 的 cursor-pointer 工具类、组件内联 style="cursor:pointer"；
+   组件类（.btn-* / .toggle-switch / .code-block-copy）已在各自定义处直接改为 default。
+   不影响：输入框文本光标、ResizeHandle 的 col-resize、禁用态 not-allowed、文本选择、流式 .stream-cursor。 */
+.cursor-pointer,
+[style*='cursor: pointer'],
+[style*='cursor:pointer'] {
+  cursor: default !important;
 }

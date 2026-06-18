@@ -9,7 +9,7 @@ export type TaskStatus =
 export type AgentRole = string
 export type RiskLevel = 'low' | 'medium' | 'high'
 /** 右侧停靠区单实例 tab：审查（diff+审批合一）/ 任务 / Git / 预览 */
-export type RightTab = 'review' | 'task' | 'git' | 'preview'
+export type RightTab = 'review' | 'task' | 'git' | 'preview' | 'spec'
 
 export interface Conversation {
   id: string
@@ -52,6 +52,10 @@ export interface Message {
     durationMs?: number
     cwd?: string
     thinkingMs?: number
+    /** 规划期澄清（Phase 1a）：Orchestrator 发问 + 候选项，前端渲染为快捷按钮 */
+    clarify?: { question?: string; options: string[]; recommended?: number }
+    /** 计划确认门禁（Phase 1b）：pipeline 任务计划待用户批准/取消 */
+    planConfirm?: { goal?: string; taskCount?: number }
   }
   /** 多模态图片附件（前端用 base64 data URL 展示缩略图；当前会话内有效） */
   attachments?: { type: 'image'; url: string; filename?: string }[]
@@ -64,6 +68,8 @@ export interface Task {
   agentRole: AgentRole
   status: TaskStatus
   dependsOn: string[]
+  /** EARS 验收标准（Phase 2）：当 X，系统应 Y */
+  acceptance?: string
   result?: string
   startedAt?: string
   finishedAt?: string

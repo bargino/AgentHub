@@ -38,9 +38,18 @@ export function PreviewPanel(): React.JSX.Element {
       } else if (frame.type === 'preview.failed') {
         setWsStatus('offline')
         setStarting(false)
-        const d = frame.data as { error?: string }
-        setStartError(d.error ?? 'unknown error')
-        setLogs((prev) => [...prev, `[preview] failed: ${d.error ?? 'unknown error'}`])
+        const d = frame.data as { error?: string; logs?: string[] }
+        const errMsg = d.error ?? 'unknown error'
+        setStartError(errMsg)
+        setLogs((prev) => [
+          ...prev,
+          `[preview] failed: ${errMsg}`,
+          ...(d.logs && d.logs.length > 0
+            ? ['[preview] ──── dev server 输出（最后 20 行）────', ...d.logs]
+            : [])
+        ])
+        // 失败时自动展开日志，让真实子进程报错（如缺依赖）当场可见
+        setShowLogs(true)
       }
     }
     wsClient.onEvent(handler)

@@ -76,6 +76,9 @@ class AdapterContext:
     # 各 adapter 转换为自身 SDK 图片输入（claude=base64 block / codex=本地路径）。
     # None/空 = 纯文本，行为与改动前完全一致。
     attachments: Optional[list[dict[str, Any]]] = None
+    # ① 稳定前缀（角色系统提示 + 安全约束 + 规则/宪法）：claude 走 system_prompt preset+append
+    # 享自动 prompt 缓存；codex 前置拼到 turn 内容。None = 不拆分（行为同前）。
+    system_prompt: Optional[str] = None
 
 
 class ICodeAdapter(ABC):

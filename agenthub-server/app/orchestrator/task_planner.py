@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from app.orchestrator.prompts import (
     AgentSpec,
     ORCHESTRATOR_USER_TEMPLATE,
+    PLAN_REVISE_SYSTEM,
+    PLAN_REVISE_USER_TEMPLATE,
     build_orchestrator_system,
     intensity_hint,
 )
@@ -26,6 +28,19 @@ _DECISION_MAX_ATTEMPTS = 2
 
 # #10 fan-out 封顶：单任务最多并行方案数（成本护栏，防 N 倍 LLM 调用爆炸）
 _FAN_OUT_CAP = max(1, int(os.environ.get("AGENTHUB_FAN_OUT_CAP") or "3"))
+
+# F：默认可分派角色（DB 无 agent 时的回退）——单一真相源，避免多处硬编码漂移
+_DEFAULT_ROLES = ("planner", "coder", "reviewer", "deployer")
+
+# item 1：决策自检纠偏阈值。single/direct 决策若模型自评低置信或高复杂，且本轮允许澄清，
+# 则回退 clarify 让用户定夺（避免"复杂误判为单步直接执行"）。0 置信视为未给、不纠偏。
+_MIN_DECISION_CONFIDENCE = max(0.0, min(1.0, float(os.environ.get("AGENTHUB_MIN_DECISION_CONFIDENCE") or "0.55")))
+_HIGH_COMPLEXITY = max(1, int(os.environ.get("AGENTHUB_HIGH_COMPLEXITY") or "4"))
+
+# item 4：规划→批判→修订。仅对高复杂度 pipeline 计划跑一次自评改进（额外 1 次轻模型 LLM 调用）；
+# 默认开，可用 AGENTHUB_PLAN_CRITIQUE=0 关闭。complexity 阈值与触发面用 _PLAN_CRITIQUE_COMPLEXITY。
+_PLAN_CRITIQUE_ON = (os.environ.get("AGENTHUB_PLAN_CRITIQUE") or "1").strip().lower() not in ("0", "false", "off", "no")
+_PLAN_CRITIQUE_COMPLEXITY = max(1, int(os.environ.get("AGENTHUB_PLAN_CRITIQUE_COMPLEXITY") or "4"))
 
 
 async def _execute_decision(adapter, ctx) -> str:
@@ -122,6 +137,8 @@ class PlannedTask:
     title: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
+    # Phase 2：EARS 风格验收标准（"当 X，系统应 Y"），供 spec 落盘与 reviewer/eval 对标
+    acceptance: str = ""
     # #10 >1 时该任务派 N 个 cross-model attempt 并行出方案（只读），裁决择优后单点落地
     fan_out: int = 1
 
@@ -139,21 +156,70 @@ class Decision:
     - mode=direct：Orchestrator 直接回答，answer 为答复正文，plan 为 None
     - mode=single：派 1 个 agent 执行，plan 含单任务，不发任务计划消息
     - mode=pipeline：多步协作，plan 含 DAG，发任务计划消息
+    - mode=clarify：先向用户澄清（question + options[] + recommended），不执行任务
     """
 
     mode: str
     answer: str = ""
     plan: TaskPlan | None = None
+    # mode=clarify：规划期交互澄清（Phase 1a）
+    question: str = ""
+    options: list[str] = field(default_factory=list)
+    recommended: int = -1
+    # 决策自评（item 1）：confidence∈[0,1] 模型对本决策的把握；complexity∈[1,5] 任务复杂度
+    # （0=未给）。供"低置信/高复杂的 single/direct 回退 clarify"的兜底纠偏。
+    confidence: float = 1.0
+    complexity: int = 0
+
+
+def _first_json_object(text: str) -> str | None:
+    """E：扫描出第一个大括号平衡的 JSON 对象子串（正确跳过字符串内的花括号/转义）。
+
+    用于容忍 LLM 在 JSON 前后夹带说明文字（如"好的，计划如下：{...}"）。
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 def _extract_json(raw: str) -> dict | None:
-    """从 LLM 文本提取 JSON 对象（容忍 markdown 代码围栏）。"""
+    """从 LLM 文本提取 JSON 对象（容忍 markdown 代码围栏 + 前后夹带文字）。"""
     text = raw.strip()
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence:
         text = fence.group(1).strip()
     try:
         data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        pass
+    # E：直解失败时，提取首个大括号平衡对象再试（抗 LLM 前后夹带说明）
+    obj = _first_json_object(text)
+    if obj is None:
+        return None
+    try:
+        data = json.loads(obj)
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
@@ -191,6 +257,8 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
                 depends_on=[str(d) for d in deps],
                 requires_approval=bool(item.get("requiresApproval", False))
                 or agent == "deployer",  # 部署强制审批
+                # H：折叠空白为单行，保证验收标准规整、表格安全
+                acceptance=" ".join(str(item.get("acceptance", "")).split())[:500],
                 fan_out=fan_out,
             )
         )
@@ -207,18 +275,55 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
     return TaskPlan(goal=goal, tasks=tasks)
 
 
+def _self_assessment(data: dict) -> tuple[float, int]:
+    """item 1：解析模型自评 confidence∈[0,1] 与 complexity∈[1,5]（缺/非法→1.0/0）。"""
+    try:
+        conf = max(0.0, min(1.0, float(data.get("confidence"))))
+    except (TypeError, ValueError):
+        conf = 1.0
+    try:
+        cplx = max(0, min(5, int(data.get("complexity"))))
+    except (TypeError, ValueError):
+        cplx = 0
+    return conf, cplx
+
+
 def _parse_decision(raw: str, valid_agents: set[str]) -> Decision | None:
     """解析调度决策器输出为 Decision（无法识别返回 None，由调用方回退）。"""
     data = _extract_json(raw)
     if data is None:
         return None
     mode = str(data.get("mode", "")).strip().lower()
+    conf, cplx = _self_assessment(data)
 
     if mode == "direct":
         answer = str(data.get("answer", "")).strip()
         if not answer:
             return None
-        return Decision(mode="direct", answer=answer)
+        return Decision(mode="direct", answer=answer, confidence=conf, complexity=cplx)
+
+    if mode == "clarify":
+        question = str(data.get("question", "")).strip()
+        raw_opts = data.get("options")
+        options = (
+            [str(o).strip() for o in raw_opts if str(o).strip()]
+            if isinstance(raw_opts, list)
+            else []
+        )
+        # 澄清至少要有问题 + 2 个可选项，否则视为无效决策由调用方回退
+        if not question or len(options) < 2:
+            return None
+        options = options[:6]
+        rec = data.get("recommended", -1)
+        recommended = (
+            rec
+            if isinstance(rec, int) and not isinstance(rec, bool) and 0 <= rec < len(options)
+            else -1
+        )
+        return Decision(
+            mode="clarify", question=question, options=options, recommended=recommended,
+            confidence=conf, complexity=cplx,
+        )
 
     if mode == "single":
         agent = str(data.get("agent", "")).strip().lower()
@@ -237,14 +342,14 @@ def _parse_decision(raw: str, valid_agents: set[str]) -> Decision | None:
                 )
             ],
         )
-        return Decision(mode="single", plan=plan)
+        return Decision(mode="single", plan=plan, confidence=conf, complexity=cplx)
 
     if mode == "pipeline":
         goal = str(data.get("goal", "")).strip()
         plan = _parse_tasks(data.get("tasks"), goal, valid_agents)
         if plan is None:
             return None
-        return Decision(mode="pipeline", plan=plan)
+        return Decision(mode="pipeline", plan=plan, confidence=conf, complexity=cplx)
 
     return None
 
@@ -274,7 +379,7 @@ def _fallback_decision(instructions: str, valid_agents: set[str] | None = None) 
     比拆 planner->coder->reviewer 三段链省 token，且仍能动手。
     """
     goal = instructions.strip()[:80] or "执行任务"
-    roles = valid_agents or {"planner", "coder", "reviewer", "deployer"}
+    roles = valid_agents or set(_DEFAULT_ROLES)
     agent = next(
         (r for r in ("coder", "planner", "reviewer") if r in roles),
         sorted(roles)[0] if roles else "coder",
@@ -294,6 +399,34 @@ def _fallback_decision(instructions: str, valid_agents: set[str] | None = None) 
     return Decision(mode="single", plan=plan)
 
 
+def _reconcile_low_confidence(decision: Decision, allow_clarify: bool) -> Decision:
+    """item 1：single/direct 决策若模型自评低置信或高复杂 → 回退 clarify 让用户定夺。
+
+    只在允许澄清时纠偏（否则尊重原决策，避免死循环）；pipeline 已有确认门禁、clarify 已是澄清，
+    均不纠偏。confidence==0 视为模型未给自评，按"未触发"处理（仅看 complexity）。
+    """
+    if not allow_clarify or decision.mode not in ("single", "direct"):
+        return decision
+    low_conf = 0.0 < decision.confidence < _MIN_DECISION_CONFIDENCE
+    high_cplx = decision.complexity >= _HIGH_COMPLEXITY
+    if not (low_conf or high_cplx):
+        return decision
+    reason = "复杂度较高" if high_cplx else "我对直接处理的把握不足"
+    options = ["按单步直接做（快）", "拆成可评审的多步计划（稳）", "我再补充一下需求细节"]
+    logger.info(
+        "decide 低置信纠偏：mode=%s conf=%.2f cplx=%d → clarify",
+        decision.mode, decision.confidence, decision.complexity,
+    )
+    return Decision(
+        mode="clarify",
+        question=f"这个需求{reason}，你希望怎么推进？",
+        options=options,
+        recommended=1,
+        confidence=decision.confidence,
+        complexity=decision.complexity,
+    )
+
+
 def compose_replan_instructions(original: str, failed: list[tuple[str, str]]) -> str:
     """把失败任务清单作为局部重规划上下文喂回 decide()（orchestrator-workers 动态分解）。
 
@@ -309,6 +442,66 @@ def compose_replan_instructions(original: str, failed: list[tuple[str, str]]) ->
     )
 
 
+async def _critique_and_revise(
+    adapter, base_ctx, instructions: str, plan: TaskPlan, valid_agents: set[str]
+) -> TaskPlan:
+    """item 4：对高复杂度 pipeline 计划做一次"批判→修订"（复用同一 adapter/凭证，1 次 LLM 调用）。
+
+    解析失败 / 异常 / 修订非法一律保留原计划（只增不减的安全纠偏，绝不让评审拖垮规划）。
+    """
+    try:
+        from app.adapters.base import AdapterContext, UnifiedApprovalMode, UnifiedSandboxLevel
+
+        plan_json = json.dumps(
+            {
+                "goal": plan.goal,
+                "tasks": [
+                    {
+                        "id": t.id,
+                        "agent": t.agent,
+                        "title": t.title,
+                        "acceptance": t.acceptance,
+                        "dependsOn": t.depends_on,
+                        "requiresApproval": t.requires_approval,
+                    }
+                    for t in plan.tasks
+                ],
+            },
+            ensure_ascii=False,
+        )
+        ctx = AdapterContext(
+            instructions=PLAN_REVISE_USER_TEMPLATE.format(
+                instructions=instructions[:2000], plan_json=plan_json
+            ),
+            system_prompt=PLAN_REVISE_SYSTEM
+            + "\n\n可用角色：" + ", ".join(sorted(valid_agents)),
+            workspace_path=".",
+            approval_mode=UnifiedApprovalMode.AUTO,
+            sandbox_level=UnifiedSandboxLevel.READ_ONLY,
+            model=base_ctx.model,
+            provider=base_ctx.provider,
+        )
+        raw = await _execute_decision(adapter, ctx)
+        if not raw:
+            return plan
+        data = _extract_json(raw)
+        if not data:
+            return plan
+        revised = _parse_tasks(
+            data.get("tasks"), str(data.get("goal", "")).strip() or plan.goal, valid_agents
+        )
+        if revised is None:
+            return plan
+        logger.info(
+            "plan critique→revise: %d→%d tasks | %s",
+            len(plan.tasks), len(revised.tasks), str(data.get("critique", ""))[:160],
+        )
+        return revised
+    except Exception:
+        logger.warning("plan critique/revise 失败，保留原计划", exc_info=True)
+        return plan
+
+
 async def decide(
     instructions: str,
     *,
@@ -316,6 +509,7 @@ async def decide(
     project_context: str = "",
     member_ids: list[str] | None = None,
     collab_intensity: str | None = None,
+    allow_clarify: bool = True,
 ) -> Decision:
     """意图分流决策（member_ids 非空时只在会话群成员中分派）。
 
@@ -327,9 +521,7 @@ async def decide(
     决策器不可用或解析失败时回退到单步任务（_fallback_decision）。
     """
     specs = await _get_agent_specs(member_ids)
-    valid_agents = (
-        {s.role for s in specs} if specs else {"planner", "coder", "reviewer", "deployer"}
-    )
+    valid_agents = {s.role for s in specs} if specs else set(_DEFAULT_ROLES)
 
     try:
         from app.core.registry import get_global_registry
@@ -354,17 +546,27 @@ async def decide(
 
             from app.adapters.base import AdapterContext, UnifiedApprovalMode, UnifiedSandboxLevel
 
-            decision_prompt = build_orchestrator_system(specs) + "\n\n" + ORCHESTRATOR_USER_TEMPLATE.format(
+            # ③ 决策态瘦身：精简 agent 清单 + 宪法只取头部（路由够用）；full specs/宪法留执行态
+            # ① 稳定系统前缀（orchestrator system，按 specs 稳定）→ system_prompt 享自动缓存；
+            #    每轮变量（用户需求/上下文/宪法/clarify 开关）进 user 侧 instructions
+            system_prefix = build_orchestrator_system(specs, slim=True)
+            decision_prompt = ORCHESTRATOR_USER_TEMPLATE.format(
                 instructions=instructions,
                 conversation_context=conversation_context or "（无）",
-                project_context=project_context or "（无）",
+                project_context=(project_context or "（无）")[:2500],
                 intensity_hint=intensity_hint(collab_intensity),
             )
+            if not allow_clarify:
+                decision_prompt += (
+                    "\n\n## 注意：本轮禁止 clarify（已达澄清上限），"
+                    "必须直接输出 direct / single / pipeline。"
+                )
             # 规划复用 orchestrator 凭证：用其偏好 adapter 时注入 provider/model，否则配了
             # 第三方 base_url 的 codex/claude 规划缺凭证回退本地登录态而失败 → fallback single
             use_pref = adapter_name == pref
             ctx = AdapterContext(
                 instructions=decision_prompt,
+                system_prompt=system_prefix,
                 workspace_path=".",
                 approval_mode=UnifiedApprovalMode.AUTO,
                 sandbox_level=UnifiedSandboxLevel.READ_ONLY,
@@ -378,7 +580,21 @@ async def decide(
                 if not raw:
                     break
                 decision = _parse_decision(raw, valid_agents)
+                if decision and not allow_clarify and decision.mode == "clarify":
+                    decision = None  # 已达澄清上限：拒绝 clarify，触发重试/回退到非 clarify
                 if decision:
+                    # item 1：低置信/高复杂的 single/direct 回退 clarify（allow_clarify 时）
+                    decision = _reconcile_low_confidence(decision, allow_clarify)
+                    # item 4：高复杂 pipeline 做一次批判→修订（失败保留原计划）
+                    if (
+                        decision.mode == "pipeline"
+                        and decision.plan is not None
+                        and _PLAN_CRITIQUE_ON
+                        and decision.complexity >= _PLAN_CRITIQUE_COMPLEXITY
+                    ):
+                        decision.plan = await _critique_and_revise(
+                            adapter, ctx, instructions, decision.plan, valid_agents
+                        )
                     return decision
                 logger.warning(
                     "Decision parse failed (attempt %d/%d): %s",

@@ -29,6 +29,7 @@ class GoldenCase:
     events: list[dict] = field(default_factory=list)
     trace_id: str | None = None
     pass_threshold: int = 3  # 质量达标分数线（1-5）
+    expect_pass: bool = True  # f3 golden 标注：该样本是否「应当通过」（含负样本=应被门禁拦下）
 
 
 @dataclass
@@ -68,6 +69,20 @@ class EvalReport:
 
 # 质量评分函数签名：给定用例 -> 评分结果（生产=llm_judge，单测=桩）
 Scorer = Callable[["GoldenCase"], Awaitable["JudgeResult"]]
+
+
+def rubric_from_acceptance(criteria: list[str]) -> str:
+    """把任务的 EARS 验收标准拼成 judge rubric（Phase 3：规格=评测，spec 即评测标准）。
+
+    供从 spec / Task.acceptance 构造 GoldenCase.rubric，使离线评测与运行时复审同口径。
+    无验收标准时回退到按需求评估，不编造标准。
+    """
+    items = [c.strip() for c in criteria if c and c.strip()]
+    if not items:
+        return "按原始需求评估输出是否正确、完整、可用。"
+    lines = ["逐条核对以下验收标准，全部满足才算通过："]
+    lines.extend(f"- {c}" for c in items)
+    return "\n".join(lines)
 
 
 async def run_eval(cases: list[GoldenCase], scorer: Scorer) -> EvalReport:

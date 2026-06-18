@@ -28,20 +28,35 @@ CONTEXT_MESSAGE_TYPES = ["user", "agent", "system", "error"]
 
 # ---------------- 模型上下文窗口 -> 记忆预算 ----------------
 
-# 模型名前缀（小写）-> 上下文窗口 token 数；未命中走保守默认
+# 模型名前缀（小写）-> 上下文窗口 token 数；按列表顺序「首个 startswith 命中」生效，
+# 故更具体的前缀必须排在更泛化的前缀之前（如 gpt-5.5 在 gpt-5 之前）。未命中走保守默认。
+# 数值取各家「模型」上下文窗口（非订阅/CLI 临时上限）；最后核对：2026-06。
 _MODEL_WINDOW_TOKENS: list[tuple[str, int]] = [
+    # Claude 4.x：Opus / Sonnet 4.x = 1M；Haiku 4.x = 200k；旧版 3.x 及未知走 200k 兜底
+    ("claude-opus", 1_000_000),
+    ("claude-sonnet", 1_000_000),
+    ("claude-haiku", 200_000),
     ("claude", 200_000),
+    # OpenAI：GPT-5.5 API ~1M（Codex 订阅默认 400k，可经 context_window override 放大）；
+    # GPT-5 基础档 400k；GPT-4.1 1M；GPT-4o 128k；o3 / o4 推理系 200k
+    ("gpt-5.5", 1_000_000),
     ("gpt-5", 400_000),
     ("gpt-4.1", 1_000_000),
     ("gpt-4o", 128_000),
     ("o3", 200_000),
     ("o4", 200_000),
+    # Gemini 3.x Pro 官方 1M（部分三方文档称 2M，取官方保守口径）
     ("gemini", 1_000_000),
+    # DeepSeek V4（Pro/Flash）默认 1M；V3.2 及更早 128k
+    ("deepseek-v4", 1_000_000),
     ("deepseek", 128_000),
+    # Kimi K2.5 / K2.6 = 256k（262,144）
     ("kimi", 256_000),
     ("moonshot", 256_000),
+    # Qwen3（-2507）原生 256k（可扩展至 1M，按原生口径）
     ("qwen", 256_000),
-    ("glm", 128_000),
+    # 智谱 GLM-4.6 = 200k（由 4.5 的 128k 提升）
+    ("glm", 200_000),
 ]
 DEFAULT_WINDOW_TOKENS = 128_000
 

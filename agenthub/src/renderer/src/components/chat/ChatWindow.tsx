@@ -6,6 +6,7 @@ import {
   MessageCircle,
   Users,
   Files,
+  FileText,
   FolderPlus,
   AtSign,
   SquareSlash
@@ -18,6 +19,7 @@ import { MessageInput } from './MessageInput'
 import { AgentStatusBar } from './AgentStatusBar'
 import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
+import { Tooltip } from '../ui/Tooltip'
 import { getRoleColor, getRoleLabel } from '../ui/role'
 import { useT, t as tFn } from '../../i18n'
 
@@ -36,41 +38,43 @@ function MemberStack(): React.JSX.Element | null {
   const rest = members.length - shown.length
 
   return (
-    <button
-      onClick={() => useAppStore.getState().toggleGroupPanel()}
-      title={tr('chat.memberStackTitle', { count: members.length })}
-      className="flex items-center border-none bg-transparent cursor-pointer pl-1"
-    >
-      {shown.map((m, i) => (
-        <span
-          key={m.id}
-          className="rounded-full"
-          style={{
-            marginLeft: i === 0 ? 0 : -8,
-            boxShadow: '0 0 0 2px var(--color-bg-container)',
-            borderRadius: '50%',
-            zIndex: shown.length - i
-          }}
-        >
-          <Avatar role={m.role} size="sm" />
-        </span>
-      ))}
-      {rest > 0 && (
-        <span
-          className="flex items-center justify-center rounded-full text-[10px] font-semibold"
-          style={{
-            width: 28,
-            height: 28,
-            marginLeft: -8,
-            background: 'var(--color-bg-spotlight)',
-            color: 'var(--color-text-secondary)',
-            boxShadow: '0 0 0 2px var(--color-bg-container)'
-          }}
-        >
-          +{rest}
-        </span>
-      )}
-    </button>
+    <Tooltip content={tr('chat.memberStackTitle', { count: members.length })} placement="bottom">
+      <button
+        onClick={() => useAppStore.getState().toggleGroupPanel()}
+        aria-label={tr('chat.memberStackTitle', { count: members.length })}
+        className="flex items-center border-none bg-transparent cursor-pointer pl-1"
+      >
+        {shown.map((m, i) => (
+          <span
+            key={m.id}
+            className="rounded-full"
+            style={{
+              marginLeft: i === 0 ? 0 : -8,
+              boxShadow: '0 0 0 2px var(--color-bg-container)',
+              borderRadius: '50%',
+              zIndex: shown.length - i
+            }}
+          >
+            <Avatar role={m.role} size="sm" />
+          </span>
+        ))}
+        {rest > 0 && (
+          <span
+            className="flex items-center justify-center rounded-full text-[10px] font-semibold"
+            style={{
+              width: 28,
+              height: 28,
+              marginLeft: -8,
+              background: 'var(--color-bg-spotlight)',
+              color: 'var(--color-text-secondary)',
+              boxShadow: '0 0 0 2px var(--color-bg-container)'
+            }}
+          >
+            +{rest}
+          </span>
+        )}
+      </button>
+    </Tooltip>
   )
 }
 
@@ -90,21 +94,23 @@ function ToolbarButton({
   pulse?: boolean
 }): React.JSX.Element {
   return (
-    <button
-      onClick={onClick}
-      title={title}
-      className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs hover-spotlight"
-      style={{ color: active ? 'var(--color-brand)' : 'var(--color-text-secondary)' }}
-    >
-      {icon}
-      <span>{label}</span>
-      {pulse && (
-        <span
-          className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full animate-pulse"
-          style={{ background: 'var(--color-warning)' }}
-        />
-      )}
-    </button>
+    <Tooltip content={title} placement="bottom">
+      <button
+        onClick={onClick}
+        aria-label={title}
+        className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs hover-spotlight"
+        style={{ color: active ? 'var(--color-brand)' : 'var(--color-text-secondary)' }}
+      >
+        {icon}
+        <span className="chat-toolbar-label">{label}</span>
+        {pulse && (
+          <span
+            className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full animate-pulse"
+            style={{ background: 'var(--color-warning)' }}
+          />
+        )}
+      </button>
+    </Tooltip>
   )
 }
 
@@ -298,7 +304,7 @@ function EmptyState(): React.JSX.Element {
             className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-2xl flex items-center justify-center"
             style={{
               background: 'var(--gradient-brand)',
-              boxShadow: '0 4px 16px rgba(37, 99, 235, 0.35)'
+              boxShadow: 'var(--shadow-brand-lg)'
             }}
           >
             <MessageCircle size={24} color="#fff" />
@@ -336,7 +342,7 @@ function EmptyState(): React.JSX.Element {
             </div>
           </button>
           <div
-            className="card-hover w-40 p-4 rounded-xl text-left"
+            className="w-40 p-4 rounded-xl text-left"
             style={{
               background: 'var(--color-bg-container)',
               border: '1px solid var(--color-border-light)'
@@ -356,7 +362,7 @@ function EmptyState(): React.JSX.Element {
             </div>
           </div>
           <div
-            className="card-hover w-40 p-4 rounded-xl text-left"
+            className="w-40 p-4 rounded-xl text-left"
             style={{
               background: 'var(--color-bg-container)',
               border: '1px solid var(--color-border-light)'
@@ -453,13 +459,13 @@ export function ChatWindow(): React.JSX.Element {
   return (
     <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--color-bg-layout)' }}>
       <div
-        className="flex items-center justify-between px-5 py-3 shrink-0"
+        className="chat-header flex items-center justify-between gap-2 px-5 py-3 shrink-0 overflow-hidden"
         style={{
           background: 'var(--color-bg-container)',
           borderBottom: '1px solid var(--color-border-light)'
         }}
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <span
             className="text-sm font-semibold truncate"
             style={{ color: 'var(--color-text-primary)' }}
@@ -500,6 +506,13 @@ export function ChatWindow(): React.JSX.Element {
               icon={<ListTodo size={14} />}
               label={tr('chat.toolbar.task')}
               active={rightTab === 'task'}
+            />
+            <ToolbarButton
+              onClick={() => setTab('spec')}
+              title={tr('chat.toolbar.specTitle')}
+              icon={<FileText size={14} />}
+              label={tr('chat.toolbar.spec')}
+              active={rightTab === 'spec'}
             />
             <ToolbarButton
               onClick={() => setTab('git')}

@@ -22,6 +22,7 @@ import {
 import { useAppStore, resolveMembers } from '../../store'
 import { type MsgAttachment } from '../../services/websocket'
 import { Avatar } from '../ui/Avatar'
+import { Tooltip } from '../ui/Tooltip'
 import { getRoleLabel } from '../ui/role'
 import { useT, useLang, t as tFn } from '../../i18n'
 import type { Agent, AgentRole, RightTab } from '../../types'
@@ -490,14 +491,16 @@ export function MessageInput(): React.JSX.Element {
             {tr('chat.input.transientError')}
             {transientError.reason ? `：${transientError.reason}` : ''}
           </span>
-          <button
-            onClick={() => useAppStore.setState({ transientError: null })}
-            title={tr('chat.input.removeAttachment')}
-            className="flex items-center justify-center w-4 h-4 rounded border-none bg-transparent cursor-pointer shrink-0"
-            style={{ color: 'var(--color-error)' }}
-          >
-            <X size={11} />
-          </button>
+          <Tooltip content={tr('chat.input.removeAttachment')}>
+            <button
+              onClick={() => useAppStore.setState({ transientError: null })}
+              aria-label={tr('chat.input.removeAttachment')}
+              className="flex items-center justify-center w-4 h-4 rounded border-none bg-transparent cursor-pointer shrink-0"
+              style={{ color: 'var(--color-error)' }}
+            >
+              <X size={11} />
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -548,14 +551,16 @@ export function MessageInput(): React.JSX.Element {
               {tr('common.colon')}
               {replyingTo.content.replace(/\s+/g, ' ').slice(0, 80)}
             </span>
-            <button
-              onClick={() => useAppStore.getState().setReplyingTo(null)}
-              title={tr('chat.input.cancelQuote')}
-              className="flex items-center justify-center w-5 h-5 rounded border-none bg-transparent cursor-pointer hover-spotlight shrink-0"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <X size={12} />
-            </button>
+            <Tooltip content={tr('chat.input.cancelQuote')}>
+              <button
+                onClick={() => useAppStore.getState().setReplyingTo(null)}
+                aria-label={tr('chat.input.cancelQuote')}
+                className="flex items-center justify-center w-5 h-5 rounded border-none bg-transparent cursor-pointer hover-spotlight shrink-0"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <X size={12} />
+              </button>
+            </Tooltip>
           </div>
         )}
 
@@ -575,21 +580,23 @@ export function MessageInput(): React.JSX.Element {
                     border: '1px solid var(--color-border-light)'
                   }}
                 />
-                <button
-                  onClick={() => removeAttachment(i)}
-                  title={tr('chat.input.removeAttachment')}
-                  className="absolute flex items-center justify-center border-none cursor-pointer"
-                  style={{
-                    top: -6,
-                    right: -6,
-                    width: 16,
-                    height: 16,
-                    borderRadius: '50%',
-                    background: 'var(--color-error)'
-                  }}
-                >
-                  <X size={10} color="#fff" />
-                </button>
+                <Tooltip content={tr('chat.input.removeAttachment')}>
+                  <button
+                    onClick={() => removeAttachment(i)}
+                    aria-label={tr('chat.input.removeAttachment')}
+                    className="absolute flex items-center justify-center border-none cursor-pointer"
+                    style={{
+                      top: -6,
+                      right: -6,
+                      width: 16,
+                      height: 16,
+                      borderRadius: '50%',
+                      background: 'var(--color-error)'
+                    }}
+                  >
+                    <X size={10} color="#fff" />
+                  </button>
+                </Tooltip>
               </div>
             ))}
           </div>
@@ -620,51 +627,61 @@ export function MessageInput(): React.JSX.Element {
         <div className="flex items-center justify-between px-3 pb-2.5">
           {/* 左侧工具栏 */}
           <div className="flex items-center gap-0.5">
-            <button
-              onClick={insertAt}
-              title={tr('chat.input.atTitle')}
-              className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <AtSign size={15} />
-            </button>
-            <button
-              onClick={insertSlash}
-              title={tr('chat.input.slashTitle')}
-              disabled={text !== ''}
-              className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent hover-spotlight"
-              style={{
-                color: 'var(--color-text-tertiary)',
-                cursor: text === '' ? 'pointer' : 'not-allowed',
-                opacity: text === '' ? 1 : 0.4
-              }}
-            >
-              <SquareSlash size={15} />
-            </button>
-            <button
-              onClick={insertCodeBlock}
-              title={tr('chat.input.codeTitle')}
-              className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <Code size={15} />
-            </button>
-            <button
-              onClick={() => void attachFile()}
-              title={tr('chat.input.fileTitle')}
-              className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <Paperclip size={15} />
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              title={tr('chat.input.imageTitle')}
-              className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
-              style={{ color: 'var(--color-text-tertiary)' }}
-            >
-              <ImageIcon size={15} />
-            </button>
+            <Tooltip content={tr('chat.input.atTitle')}>
+              <button
+                onClick={insertAt}
+                aria-label={tr('chat.input.atTitle')}
+                className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <AtSign size={15} />
+              </button>
+            </Tooltip>
+            <Tooltip content={tr('chat.input.slashTitle')}>
+              <button
+                onClick={insertSlash}
+                aria-label={tr('chat.input.slashTitle')}
+                disabled={text !== ''}
+                className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent hover-spotlight"
+                style={{
+                  color: 'var(--color-text-tertiary)',
+                  cursor: text === '' ? 'pointer' : 'not-allowed',
+                  opacity: text === '' ? 1 : 0.4
+                }}
+              >
+                <SquareSlash size={15} />
+              </button>
+            </Tooltip>
+            <Tooltip content={tr('chat.input.codeTitle')}>
+              <button
+                onClick={insertCodeBlock}
+                aria-label={tr('chat.input.codeTitle')}
+                className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <Code size={15} />
+              </button>
+            </Tooltip>
+            <Tooltip content={tr('chat.input.fileTitle')}>
+              <button
+                onClick={() => void attachFile()}
+                aria-label={tr('chat.input.fileTitle')}
+                className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <Paperclip size={15} />
+              </button>
+            </Tooltip>
+            <Tooltip content={tr('chat.input.imageTitle')}>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                aria-label={tr('chat.input.imageTitle')}
+                className="flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                <ImageIcon size={15} />
+              </button>
+            </Tooltip>
             <input
               ref={fileInputRef}
               type="file"
@@ -688,19 +705,21 @@ export function MessageInput(): React.JSX.Element {
                 })}
                 style={{ color: 'var(--color-text-tertiary)' }}
               >
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{
-                    background:
-                      contextUsage.pressureLevel >= 3
-                        ? 'var(--color-error)'
-                        : contextUsage.pressureLevel === 2
+                {contextUsage.pressureLevel >= 3 ? (
+                  <AlertTriangle size={11} style={{ color: 'var(--color-error)' }} />
+                ) : (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{
+                      background:
+                        contextUsage.pressureLevel === 2
                           ? 'var(--color-warning)'
                           : contextUsage.pressureLevel === 1
                             ? 'var(--color-brand)'
                             : 'var(--color-text-tertiary)'
-                  }}
-                />
+                    }}
+                  />
+                )}
                 {tr('chat.input.context')}{' '}
                 {Math.min(
                   100,
@@ -710,52 +729,51 @@ export function MessageInput(): React.JSX.Element {
               </span>
             )}
             {running ? (
-              <button
-                onClick={() => void useAppStore.getState().stopGeneration()}
-                title={tr('chat.input.stop')}
-                className="btn-press flex items-center justify-center w-7 h-7"
-                style={{
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  background: 'var(--color-error)',
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(255, 77, 79, 0.35)'
-                }}
-              >
-                <Square size={11} color="#fff" fill="#fff" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={!canSend}
-                className="btn-press flex items-center justify-center w-7 h-7 overflow-hidden"
-                style={{
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  background: canSend ? 'var(--gradient-brand)' : 'var(--color-border-light)',
-                  cursor: canSend ? 'pointer' : 'not-allowed',
-                  boxShadow: canSend ? '0 2px 8px rgba(37, 99, 235, 0.35)' : 'none'
-                }}
-                onMouseEnter={(e) => {
-                  if (canSend) e.currentTarget.style.transform = 'translateY(-1px)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = ''
-                }}
-              >
-                <Send
-                  size={14}
-                  color={canSend ? '#fff' : 'var(--color-text-tertiary)'}
-                  strokeWidth={2}
+              <Tooltip content={tr('chat.input.stop')}>
+                <button
+                  onClick={() => void useAppStore.getState().stopGeneration()}
+                  aria-label={tr('chat.input.stop')}
+                  className="btn-press flex items-center justify-center w-7 h-7"
                   style={{
-                    transform: justSent ? 'translateX(16px)' : 'translateX(0)',
-                    opacity: justSent ? 0 : 1,
-                    transition: justSent
-                      ? 'transform 250ms var(--ease-out-quart), opacity 250ms var(--ease-out-quart)'
-                      : 'none'
+                    borderRadius: 'var(--radius-md)',
+                    border: 'none',
+                    background: 'var(--color-error)',
+                    cursor: 'pointer',
+                    boxShadow: 'var(--shadow-error)'
                   }}
-                />
-              </button>
+                >
+                  <Square size={11} color="#fff" fill="#fff" />
+                </button>
+              </Tooltip>
+            ) : (
+              <Tooltip content={tr('chat.input.send')}>
+                <button
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  aria-label={tr('chat.input.send')}
+                  className="btn-press hover-lift flex items-center justify-center w-7 h-7 overflow-hidden"
+                  style={{
+                    borderRadius: 'var(--radius-md)',
+                    border: 'none',
+                    background: canSend ? 'var(--gradient-brand)' : 'var(--color-border-light)',
+                    cursor: canSend ? 'pointer' : 'not-allowed',
+                    boxShadow: canSend ? 'var(--shadow-brand)' : 'none'
+                  }}
+                >
+                  <Send
+                    size={14}
+                    color={canSend ? '#fff' : 'var(--color-text-tertiary)'}
+                    strokeWidth={2}
+                    style={{
+                      transform: justSent ? 'translateX(16px)' : 'translateX(0)',
+                      opacity: justSent ? 0 : 1,
+                      transition: justSent
+                        ? 'transform 250ms var(--ease-out-quart), opacity 250ms var(--ease-out-quart)'
+                        : 'none'
+                    }}
+                  />
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>

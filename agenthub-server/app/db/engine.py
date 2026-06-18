@@ -97,6 +97,11 @@ _SQLITE_COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         ("adapter_name", "VARCHAR(32)"),
         ("diff_id", "VARCHAR(32)"),
     ],
+    "tasks": [
+        # Phase 2。Postgres 等生产库需走正式迁移（Alembic）：
+        #   ALTER TABLE tasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';
+        ("acceptance", "TEXT NOT NULL DEFAULT ''"),
+    ],
 }
 
 

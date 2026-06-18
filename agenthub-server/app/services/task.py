@@ -56,6 +56,7 @@ def _to_out(task: Task) -> TaskOut:
         agent_role=task.agent_role,
         status=task.status,
         depends_on=list(task.depends_on or []),
+        acceptance=task.acceptance or "",
         result=task.result,
         started_at=fmt_time(task.started_at) if task.started_at else None,
         finished_at=fmt_time(task.finished_at) if task.finished_at else None,
@@ -73,6 +74,7 @@ async def create_tasks(
             agent_role=item["agent_role"],
             depends_on=list(item.get("depends_on") or []),
             requires_approval=bool(item.get("requires_approval", False)),
+            acceptance=str(item.get("acceptance", "") or ""),
         )
         for item in tasks
     ]

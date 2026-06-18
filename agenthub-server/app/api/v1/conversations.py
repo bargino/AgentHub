@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +9,7 @@ from app.api.deps import get_db
 from app.core import run_registry
 from app.memory import conversation_memory, token_meter
 from app.schemas import (
+    ApprovalDecisionIn,
     ApprovalOut,
     ContextUsageOut,
     ConversationCreate,
@@ -14,7 +17,10 @@ from app.schemas import (
     ConversationUpdate,
     DiffOut,
     MessageOut,
+    PlanReviseIn,
     RollbackIn,
+    SpecFileOut,
+    SpecFileWrite,
     TaskOut,
 )
 from app.services import approval as approval_service
@@ -22,6 +28,7 @@ from app.services import conversation as conversation_service
 from app.services import diff as diff_service
 from app.services import message as message_service
 from app.services import task as task_service
+from app.services import workspace as workspace_service
 
 router = APIRouter()
 
@@ -122,6 +129,80 @@ async def rollback_conversation(
         raise HTTPException(status_code=404, detail="Message not found in conversation")
     await conversation_service.update_status(db, conversation_id, "idle")
     return {"deleted": deleted}
+
+
+@router.post("/conversations/{conversation_id}/plan/confirm")
+async def confirm_plan(conversation_id: str, data: ApprovalDecisionIn) -> dict:
+    """计划确认门禁（Phase 1b）：批准则后台执行暂存的 pipeline 计划，拒绝则取消该计划。
+
+    执行较长，故以后台任务跑 resume_plan 并注册到 run_registry（供 /stop 取消），
+    立即返回；结果经 WebSocket 事件推送前端。
+    """
+    from app.orchestrator.engine import resume_plan
+
+    task = asyncio.create_task(resume_plan(conversation_id, data.approved))
+    run_registry.register(conversation_id, task)
+    return {"ok": True, "approved": data.approved}
+
+
+@router.post("/conversations/{conversation_id}/plan/revise")
+async def revise_plan_endpoint(conversation_id: str, data: PlanReviseIn) -> dict:
+    """A：计划修改门禁——按用户意见取消旧计划并重新规划（后台），结果经 WS 推送。"""
+    from app.orchestrator.engine import revise_plan
+
+    task = asyncio.create_task(revise_plan(conversation_id, data.feedback))
+    run_registry.register(conversation_id, task)
+    return {"ok": True}
+
+
+@router.get("/conversations/{conversation_id}/specs", response_model=list[SpecFileOut])
+async def list_specs(
+    conversation_id: str, db: AsyncSession = Depends(get_db)
+) -> list[SpecFileOut]:
+    """item 2：列出该会话的规格文件（Spec Kit 三件套 + 合并版），供前端评审 / 逐条编辑。
+
+    工作区尚未创建（会话还没真正执行过 pipeline）时返回空列表，而非报错。
+    """
+    from app.services import spec_store
+
+    ws = await workspace_service.get_workspace(db, conversation_id)
+    if ws is None:
+        return []
+    return [SpecFileOut(**it) for it in spec_store.list_spec_files(ws.path, conversation_id)]
+
+
+@router.get("/conversations/{conversation_id}/specs/file")
+async def get_spec_file(
+    conversation_id: str, path: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """item 2：读取单个规格文件内容（路径限定在 specs 根内，越界 / 非 .md 一律拒绝）。"""
+    from app.services import spec_store
+
+    ws = await workspace_service.get_workspace(db, conversation_id)
+    if ws is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    content = spec_store.read_spec_file(ws.path, path)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Spec file not found")
+    return {"path": path, "content": content}
+
+
+@router.patch("/conversations/{conversation_id}/specs/file")
+async def save_spec_file(
+    conversation_id: str, data: SpecFileWrite, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """item 2：保存单个规格文件（文件级逐条编辑落盘；路径限定在 specs 根内，防穿越）。
+
+    用 PATCH 而非 PUT：前端 stdio 桥仅支持 GET/POST/PATCH/DELETE（见 services/http.ts）。
+    """
+    from app.services import spec_store
+
+    ws = await workspace_service.get_workspace(db, conversation_id)
+    if ws is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if not spec_store.write_spec_file(ws.path, data.path, data.content):
+        raise HTTPException(status_code=400, detail="Invalid spec path")
+    return {"ok": True, "path": data.path}
 
 
 @router.get(

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Bot, Sun, Moon } from 'lucide-react'
+import { Sun, Moon } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { setThemePreference } from '../../services/theme'
+import { BrandMark } from '../ui/BrandMark'
+import { Tooltip } from '../ui/Tooltip'
 import { useT } from '../../i18n'
 
 function isDarkNow(): boolean {
@@ -55,10 +57,10 @@ export function TitleBar(): React.JSX.Element | null {
           className="flex items-center justify-center w-6 h-6 rounded-md"
           style={{
             background: 'var(--gradient-brand)',
-            boxShadow: '0 2px 6px rgba(37, 99, 235, 0.35)'
+            boxShadow: 'var(--shadow-brand)'
           }}
         >
-          <Bot size={13} color="#fff" strokeWidth={2.2} />
+          <BrandMark size={16} color="#fff" />
         </span>
         <span
           className="text-xs font-semibold tracking-wide"
@@ -82,20 +84,22 @@ export function TitleBar(): React.JSX.Element | null {
 
       {/* 右侧：主题切换（no-drag 可点击） */}
       <div className="titlebar-no-drag flex items-center gap-1 shrink-0">
-        <button
-          onClick={toggleTheme}
-          title={dark ? tr('titlebar.toLight') : tr('titlebar.toDark')}
-          className="btn-press flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          <span
-            key={dark ? 'moon' : 'sun'}
-            className="flex"
-            style={{ animation: 'springPop var(--duration-base) var(--ease-spring)' }}
+        <Tooltip content={dark ? tr('titlebar.toLight') : tr('titlebar.toDark')} placement="bottom">
+          <button
+            onClick={toggleTheme}
+            aria-label={dark ? tr('titlebar.toLight') : tr('titlebar.toDark')}
+            className="btn-press flex items-center justify-center w-7 h-7 rounded-md border-none bg-transparent cursor-pointer hover-spotlight"
+            style={{ color: 'var(--color-text-secondary)' }}
           >
-            {dark ? <Moon size={15} /> : <Sun size={15} />}
-          </span>
-        </button>
+            <span
+              key={dark ? 'moon' : 'sun'}
+              className="flex"
+              style={{ animation: 'springPop var(--duration-base) var(--ease-spring)' }}
+            >
+              {dark ? <Moon size={15} /> : <Sun size={15} />}
+            </span>
+          </button>
+        </Tooltip>
       </div>
     </div>
   )
