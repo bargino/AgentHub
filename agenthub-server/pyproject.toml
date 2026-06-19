@@ -3,7 +3,7 @@ name = "agenthub-server"
 version = "0.1.0"
 description = "AgentHub unified adapter layer for AI coding tools"
 authors = ["AgentHub Team"]
-python = "^3.11"
+packages = [{ include = "app" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
