@@ -118,8 +118,8 @@ flowchart TB
 
 - **Node.js** ≥ 18（建议 20 LTS）+ npm
 - **Python** 3.11
-- **独立 Python 环境（推荐）**：后端/测试/脚本**必须**在 `conda activate <env>` 下运行，或显式使用 `<python-path>`。**禁止**用 base miniconda 默认 `python`。
-- **Conda**（推荐）：客户端解释器解析优先级：`AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名，名称自取）> PATH 上的 `python`。
+- **独立 Python 环境（推荐）**：建议用一个**装好 Agent SDK** 的独立环境（venv 或 conda，名称自取）运行后端/测试/脚本；避免用未装 SDK 的系统/base `python`，否则运行时探测不到适配器会导致任务空跑。
+- **解释器解析优先级**：客户端按 `AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名）> PATH 上的 `python` 定位后端解释器；设置其一指向你的环境即可。
 - 至少一个 Agent SDK（`claude-agent-sdk` 或 `openai-codex`）；运行时按健康检查自动探测可用性。
 
 ### 1️⃣ 后端（agenthub-server）
@@ -127,8 +127,8 @@ flowchart TB
 ```bash
 cd agenthub-server
 
-# 推荐：conda（环境名自取，下例用 agent）
-conda create -n <env> python=3.11 -y && conda activate <env>
+# 独立环境（venv 或 conda 均可，名称自取）
+python3.11 -m venv .venv && source .venv/bin/activate   # 或：conda create -n <env> python=3.11 -y && conda activate <env>
 
 # 安装依赖（二选一）
 pip install poetry && poetry install --extras all      # 方式 A：poetry
@@ -144,7 +144,7 @@ cd agenthub
 npm install
 
 # 指定后端解释器（任选其一；或先 `conda activate <env>` 让 PATH 指向该环境）
-#   按环境名 : export AGENTHUB_CONDA_ENV=<env>          # Windows(PowerShell): $env:AGENTHUB_CONDA_ENV="<env>"
+#   按环境名 : export AGENTHUB_CONDA_ENV=<env>           # Windows(PowerShell): $env:AGENTHUB_CONDA_ENV="<env>"
 #   按路径   : export AGENTHUB_PYTHON=/path/to/python   # Windows(PowerShell): $env:AGENTHUB_PYTHON="C:\path\to\python.exe"
 ```
 
