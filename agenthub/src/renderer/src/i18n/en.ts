@@ -31,6 +31,26 @@ export const en: Dict = {
     manage: 'Management',
     settings: 'Settings'
   },
+  palette: {
+    title: 'Command Palette',
+    desc: 'Search and jump to sessions, pages, panels, or run actions',
+    placeholder: 'Search: sessions / pages / panels / actions…',
+    empty: 'No results',
+    newProject: 'New project',
+    group: {
+      actions: 'Actions',
+      pages: 'Pages',
+      panels: 'Panels',
+      conversations: 'Sessions'
+    },
+    panel: {
+      review: 'Review (Diff / Approval)',
+      task: 'Tasks',
+      git: 'Files / Git',
+      preview: 'Preview',
+      group: 'Group settings'
+    }
+  },
   connection: {
     disconnected: 'AgentHub engine disconnected',
     reconnect: 'Reconnect'
@@ -271,6 +291,7 @@ export const en: Dict = {
       imageTitle: 'Attach image',
       removeAttachment: 'Remove',
       transientError: 'Model connection issue, retrying',
+      retry: 'Retry',
       working: 'Agent working…',
       enterHint: 'Enter to send / Shift+Enter for newline',
       contextTitle: 'Context used {used} / {window} tokens',
@@ -312,6 +333,8 @@ export const en: Dict = {
     },
     bubble: {
       quote: 'Quote reply',
+      edit: 'Edit & resend',
+      regenerate: 'Regenerate',
       rollback: 'Roll back to here',
       rollbackConfirm: 'Click again to confirm: delete this and all later messages',
       rollbackConfirmShort: 'Confirm rollback'

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Copy, Check, CornerUpLeft, Undo2 } from 'lucide-react'
+import { Copy, Check, Quote, Undo2, Pencil, RotateCcw } from 'lucide-react'
 import type { Message, AgentRole } from '../../types'
 import { useAppStore } from '../../store'
 import { confirmPlan, revisePlan } from '../../services/api'
@@ -47,6 +47,27 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
 
   // 仅已落库的用户消息可回退（乐观插入的 temp_ 消息无服务端 id）
   const canRollback = msg.type === 'user' && !msg.id.startsWith('temp_')
+  const isUser = msg.type === 'user'
+  const canRegenerate = msg.type === 'agent'
+  const running = useAppStore(
+    (s) => s.conversations.find((c) => c.id === msg.conversationId)?.status === 'running'
+  )
+
+  // 编辑重发：把本条内容回填输入框（复用 draftMessage 订阅，自动聚焦）
+  const edit = (): void => useAppStore.setState({ draftMessage: msg.content })
+
+  // 重新生成：找本条之前最近的用户消息，重发其内容（新一轮）
+  const regenerate = (): void => {
+    if (running) return
+    const msgs = useAppStore.getState().messages[msg.conversationId] ?? []
+    const idx = msgs.findIndex((m) => m.id === msg.id)
+    for (let i = idx - 1; i >= 0; i--) {
+      if (msgs[i].type === 'user') {
+        void useAppStore.getState().sendMessage(msgs[i].content)
+        return
+      }
+    }
+  }
 
   const rollback = (): void => {
     if (!confirmRollback) {
@@ -84,9 +105,38 @@ function BubbleActions({ msg }: { msg: Message }): React.JSX.Element {
           className="flex items-center justify-center w-6 h-6 rounded border-none bg-transparent cursor-pointer hover-spotlight"
           style={{ color: 'var(--color-text-tertiary)' }}
         >
-          <CornerUpLeft size={12} />
+          <Quote size={12} />
         </button>
       </Tooltip>
+      {isUser && (
+        <Tooltip content={tr('chat.bubble.edit')}>
+          <button
+            onClick={edit}
+            aria-label={tr('chat.bubble.edit')}
+            className="flex items-center justify-center w-6 h-6 rounded border-none bg-transparent cursor-pointer hover-spotlight"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
+            <Pencil size={12} />
+          </button>
+        </Tooltip>
+      )}
+      {canRegenerate && (
+        <Tooltip content={tr('chat.bubble.regenerate')}>
+          <button
+            onClick={regenerate}
+            disabled={running}
+            aria-label={tr('chat.bubble.regenerate')}
+            className="flex items-center justify-center w-6 h-6 rounded border-none bg-transparent hover-spotlight"
+            style={{
+              color: 'var(--color-text-tertiary)',
+              cursor: running ? 'not-allowed' : 'pointer',
+              opacity: running ? 0.4 : 1
+            }}
+          >
+            <RotateCcw size={12} />
+          </button>
+        </Tooltip>
+      )}
       {canRollback && (
         <Tooltip
           content={confirmRollback ? tr('chat.bubble.rollbackConfirm') : tr('chat.bubble.rollback')}

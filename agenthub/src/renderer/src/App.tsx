@@ -12,6 +12,7 @@ import { SettingsPage } from './components/settings/SettingsPage'
 import { ManagePage } from './components/manage/ManagePage'
 import { ResizeHandle } from './components/ui/ResizeHandle'
 import { Toaster } from './components/ui/sonner'
+import { CommandPalette } from './components/command/CommandPalette'
 import { ensureDesktopPermission } from './services/notify'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useT } from './i18n'
@@ -128,6 +129,7 @@ function App(): React.JSX.Element {
         {activePage === 'settings' && <SettingsPage />}
       </div>
       <Toaster richColors position="top-right" closeButton />
+      <CommandPalette />
     </div>
   )
 }

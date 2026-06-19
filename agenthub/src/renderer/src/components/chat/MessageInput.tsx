@@ -7,7 +7,7 @@ import {
   Code,
   Paperclip,
   X,
-  CornerUpLeft,
+  Quote,
   Map,
   Eye,
   Rocket,
@@ -17,7 +17,8 @@ import {
   Monitor,
   Users,
   Image as ImageIcon,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react'
 import { useAppStore, resolveMembers } from '../../store'
 import { type MsgAttachment } from '../../services/websocket'
@@ -65,6 +66,23 @@ function buildQuoteBlock(authorLabel: string, content: string): string {
 /** 单图上限（与后端 attachments MAX_ATTACHMENT_BYTES 对齐） */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
+/** 每会话已发输入历史（输入框 ↑/↓ 回溯，session 级，最新在末尾，上限 50）
+ *  用普通对象而非 Map：本文件 Map 名被 lucide-react 图标占用 */
+const inputHistoryStore: Record<string, string[]> = {}
+function pushInputHistory(conversationId: string, text: string): void {
+  const v = text.trim()
+  if (!v) return
+  const prev = inputHistoryStore[conversationId] ?? []
+  if (prev[prev.length - 1] === v) return
+  inputHistoryStore[conversationId] = [...prev, v].slice(-50)
+}
+
+/** 每会话最后一次发送的 payload（瞬时错误后一键重试用，session 级） */
+const lastSendStore: Record<string, { content: string; attachments?: MsgAttachment[] }> = {}
+function setLastSend(conversationId: string, content: string, attachments?: MsgAttachment[]): void {
+  lastSendStore[conversationId] = { content, attachments }
+}
+
 /** File -> base64 data URL（前端附件统一形态，与后端 AttachmentIn.url 对齐） */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -84,6 +102,8 @@ export function MessageInput(): React.JSX.Element {
   const [menuIndex, setMenuIndex] = useState(0)
   const [focused, setFocused] = useState(false)
   const [justSent, setJustSent] = useState(false)
+  // 历史回溯游标：null=未浏览；否则为当前会话历史的索引（末尾=最新）
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const activeId = useAppStore((s) => s.activeConversationId)
   const agents = useAppStore((s) => s.agents)
   const conversations = useAppStore((s) => s.conversations)
@@ -242,10 +262,25 @@ export function MessageInput(): React.JSX.Element {
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
     const val = e.target.value
     setText(val)
+    setHistoryIndex(null)
     const ta = e.target
     ta.style.height = 'auto'
     ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
     refreshMenu(val)
+  }
+
+  /** 把历史项填入输入框：设值 + 重算高度 + 光标置末尾 */
+  const applyHistoryText = (val: string): void => {
+    setText(val)
+    setShowMenu(false)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.style.height = 'auto'
+      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'
+      ta.focus()
+      ta.setSelectionRange(val.length, val.length)
+    })
   }
 
   /** 执行 /命令动作（事件触发，非 render 期）：@角色直达填充输入 / 打开对应面板 */
@@ -292,13 +327,26 @@ export function MessageInput(): React.JSX.Element {
       content = buildQuoteBlock(author, quoted.content) + content
       setReplyingTo(null)
     }
-    void sendMessage(content, attachments.length ? attachments : undefined)
+    const sendAttachments = attachments.length ? attachments : undefined
+    setLastSend(activeId, content, sendAttachments)
+    void sendMessage(content, sendAttachments)
+    pushInputHistory(activeId, text)
+    setHistoryIndex(null)
     setText('')
     setAttachments([])
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     // 发送瞬间图标飞出微动画
     setJustSent(true)
     setTimeout(() => setJustSent(false), 300)
+  }
+
+  /** 瞬时错误后一键重试：重发本会话最后一次 payload（running 态由调用处禁用） */
+  const retryLastSend = (): void => {
+    if (!activeId || running) return
+    const last = lastSendStore[activeId]
+    if (!last) return
+    useAppStore.setState({ transientError: null })
+    void useAppStore.getState().sendMessage(last.content, last.attachments)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -316,6 +364,34 @@ export function MessageInput(): React.JSX.Element {
         setShowMenu(false)
       }
       return
+    }
+    // 历史回溯：联想菜单未开 + （输入为空 或 正在浏览历史）时，↑/↓ 调出已发消息
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const history = activeId ? (inputHistoryStore[activeId] ?? []) : []
+      const len = history.length
+      // 游标对当前会话历史有效才沿用（切会话后旧游标失效，自动重置为从最新开始）
+      const cur = historyIndex !== null && historyIndex < len ? historyIndex : null
+      if (len > 0) {
+        if (e.key === 'ArrowUp' && (text === '' || cur !== null)) {
+          e.preventDefault()
+          const idx = cur === null ? len - 1 : Math.max(0, cur - 1)
+          setHistoryIndex(idx)
+          applyHistoryText(history[idx])
+          return
+        }
+        if (e.key === 'ArrowDown' && cur !== null) {
+          e.preventDefault()
+          const idx = cur + 1
+          if (idx >= len) {
+            setHistoryIndex(null)
+            applyHistoryText('')
+          } else {
+            setHistoryIndex(idx)
+            applyHistoryText(history[idx])
+          }
+          return
+        }
+      }
     }
     if (e.key === 'Escape' && replyingTo) {
       useAppStore.getState().setReplyingTo(null)
@@ -491,6 +567,19 @@ export function MessageInput(): React.JSX.Element {
             {tr('chat.input.transientError')}
             {transientError.reason ? `：${transientError.reason}` : ''}
           </span>
+          {!running && activeId && lastSendStore[activeId] && (
+            <Tooltip content={tr('chat.input.retry')}>
+              <button
+                onClick={retryLastSend}
+                aria-label={tr('chat.input.retry')}
+                className="flex items-center gap-1 px-1.5 h-5 rounded border-none bg-transparent cursor-pointer shrink-0 text-[11px] font-medium hover-spotlight"
+                style={{ color: 'var(--color-error)' }}
+              >
+                <RefreshCw size={11} />
+                {tr('chat.input.retry')}
+              </button>
+            </Tooltip>
+          )}
           <Tooltip content={tr('chat.input.removeAttachment')}>
             <button
               onClick={() => useAppStore.setState({ transientError: null })}
@@ -541,7 +630,7 @@ export function MessageInput(): React.JSX.Element {
               background: 'var(--color-bg-spotlight)'
             }}
           >
-            <CornerUpLeft size={13} style={{ color: 'var(--color-brand)', flexShrink: 0 }} />
+            <Quote size={13} style={{ color: 'var(--color-brand)', flexShrink: 0 }} />
             <span
               className="text-[12px] truncate flex-1 min-w-0"
               style={{ color: 'var(--color-text-secondary)' }}

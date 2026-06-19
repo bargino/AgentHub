@@ -31,6 +31,26 @@ export const zhCN: Dict = {
     manage: '管理中心',
     settings: '设置'
   },
+  palette: {
+    title: '命令面板',
+    desc: '搜索并跳转会话、页面、面板或执行操作',
+    placeholder: '搜索：会话 / 页面 / 面板 / 操作…',
+    empty: '无匹配结果',
+    newProject: '新建项目',
+    group: {
+      actions: '操作',
+      pages: '页面',
+      panels: '面板',
+      conversations: '会话'
+    },
+    panel: {
+      review: '审查（Diff / 审批）',
+      task: '任务',
+      git: '文件 / Git',
+      preview: '预览',
+      group: '群设置'
+    }
+  },
   connection: {
     disconnected: 'AgentHub 引擎未连接',
     reconnect: '重连'
@@ -268,6 +288,7 @@ export const zhCN: Dict = {
       imageTitle: '发送图片',
       removeAttachment: '移除',
       transientError: '模型连接异常，重试中',
+      retry: '重试',
       working: 'Agent 工作中…',
       enterHint: 'Enter 发送 / Shift+Enter 换行',
       contextTitle: '上下文已用 {used} / {window} tokens',
@@ -309,6 +330,8 @@ export const zhCN: Dict = {
     },
     bubble: {
       quote: '引用回复',
+      edit: '编辑重发',
+      regenerate: '重新生成',
       rollback: '回退到此处',
       rollbackConfirm: '再次点击确认：删除本条及之后的全部消息',
       rollbackConfirmShort: '确认回退'
