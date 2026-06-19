@@ -1,0 +1,24 @@
+{
+  "name": "agenthub-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AgentHub — 多 Agent 协作平台：Electron 桌面客户端（agenthub）+ Python 编排后端（agenthub-server）统一工程",
+  "scripts": {
+    "setup": "npm run setup:client && npm run setup:server",
+    "setup:client": "cd agenthub && npm install",
+    "setup:server": "cd agenthub-server && pip install -e \".[all]\"",
+    "dev": "cd agenthub && npm run dev",
+    "dev:server": "cd agenthub-server && python -m app.bridge",
+    "build": "cd agenthub && npm run build",
+    "build:win": "cd agenthub && npm run build:win",
+    "build:mac": "cd agenthub && npm run build:mac",
+    "build:linux": "cd agenthub && npm run build:linux",
+    "typecheck": "cd agenthub && npm run typecheck",
+    "lint": "npm run lint:client && npm run lint:server",
+    "lint:client": "cd agenthub && npm run lint",
+    "lint:server": "cd agenthub-server && ruff check app/",
+    "format": "cd agenthub && npm run format",
+    "test": "npm run test:server",
+    "test:server": "cd agenthub-server && python -m pytest -q"
+  }
+}

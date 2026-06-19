@@ -122,6 +122,20 @@ flowchart TB
 - **解释器解析优先级**：客户端按 `AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名）> PATH 上的 `python` 定位后端解释器；设置其一指向你的环境即可。
 - 至少一个 Agent SDK（`claude-agent-sdk` 或 `openai-codex`）；运行时按健康检查自动探测可用性。
 
+### 0️⃣ 一键命令（Monorepo 根目录 · 推荐）
+
+仓库根的 `package.json` 提供统一编排，前后端一条命令搞定（先激活你的 Python 环境）：
+
+```bash
+npm run setup     # 装前端依赖 + 后端依赖（agenthub + agenthub-server）
+npm run dev       # 启动桌面客户端（自动拉起 Python 后端 stdio 桥）
+npm run build     # 构建桌面应用（后端打进 resources）
+npm run lint      # 前端 eslint + 后端 ruff
+npm run test      # 后端 pytest
+```
+
+> 根脚本只是把命令委派到 `agenthub/`（前端）与 `agenthub-server/`（后端），不改变两者各自的工程结构。需要单独操作时见下方分项步骤。
+
 ### 1️⃣ 后端（agenthub-server）
 
 ```bash
