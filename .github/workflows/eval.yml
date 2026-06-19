@@ -1,0 +1,53 @@
+name: eval-gate
+
+# ⑤ 评测层回归门禁：每次 push / PR 自动跑离线 golden set。
+# accuracy < 阈值（默认 0.8）或 judge 不可用 → 退出码 1 → CI 失败拦下。
+# 逻辑见 agenthub-server/app/eval/run_golden.py。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline-eval:
+    name: golden set (offline)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agenthub-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # 离线评测用确定性桩 judge，不调 LLM —— 只需基础依赖，无需 SDK extras（claude/codex）
+      - name: Install (base deps)
+        run: pip install -e .
+      - name: Run golden set gate (offline)
+        run: python -m app.eval.run_golden --offline
+
+  # ── 可选：真 LLM 评测 ───────────────────────────────────────────────
+  # 需在仓库 Settings → Secrets 配置对应 API key，并确保适配器配置可用；
+  # judge 不可用会被 #5 逻辑判为 inconclusive → 失败（避免假绿）。
+  # 取消下面注释并按需补 env 即可启用（建议配合 schedule 做 nightly）。
+  #
+  # llm-eval:
+  #   name: golden set (real LLM)
+  #   if: github.event_name == 'workflow_dispatch'
+  #   runs-on: ubuntu-latest
+  #   defaults:
+  #     run:
+  #       working-directory: agenthub-server
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
+  #     - name: Install (含 SDK extras)
+  #       run: pip install -e ".[all]"
+  #     - name: Run golden set gate (real LLM)
+  #       run: python -m app.eval.run_golden
+  #       env:
+  #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  #         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

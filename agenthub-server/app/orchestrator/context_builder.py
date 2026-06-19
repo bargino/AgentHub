@@ -105,6 +105,18 @@ def load_custom_rules(workspace_path: str) -> str:
     return text
 
 
+def _apply_global_approval_policy(mode: UnifiedApprovalMode) -> UnifiedApprovalMode:
+    """AGENTHUB_APPROVAL_POLICY 全局覆盖（headless/CI 用 auto）。"""
+    from app.config import resolve_approval_policy
+
+    policy = resolve_approval_policy()
+    if policy == "auto" and mode == UnifiedApprovalMode.REVIEW_EDITS:
+        return UnifiedApprovalMode.AUTO
+    if policy == "deny_all":
+        return UnifiedApprovalMode.DENY_ALL
+    return mode
+
+
 def _role_policy(
     agent_role: str, capabilities: dict | None = None
 ) -> tuple[UnifiedApprovalMode, UnifiedSandboxLevel]:
@@ -112,17 +124,27 @@ def _role_policy(
 
     优先按 Agent 注册的 capabilities 判定：声明写入型能力（或未声明任何能力）
     走 REVIEW_EDITS + WORKSPACE_WRITE；只声明只读能力走 AUTO + READ_ONLY。
-    无 capabilities 时按内置角色名回退。
+    无 capabilities 时按内置角色名回退。最终经 _apply_global_approval_policy 受
+    AGENTHUB_APPROVAL_POLICY 约束（auto=headless 自动放行，仍保留 hook 白名单/围栏）。
     """
     caps = {k for k, v in (capabilities or {}).items() if v}
     if caps:
         if caps & _WRITE_CAPS:
-            return UnifiedApprovalMode.REVIEW_EDITS, UnifiedSandboxLevel.WORKSPACE_WRITE
-        if caps & _READ_ONLY_CAPS:
-            return UnifiedApprovalMode.AUTO, UnifiedSandboxLevel.READ_ONLY
-    if agent_role in ("planner", "reviewer"):
-        return UnifiedApprovalMode.AUTO, UnifiedSandboxLevel.READ_ONLY
-    return UnifiedApprovalMode.REVIEW_EDITS, UnifiedSandboxLevel.WORKSPACE_WRITE
+            mode = UnifiedApprovalMode.REVIEW_EDITS
+            sandbox = UnifiedSandboxLevel.WORKSPACE_WRITE
+        elif caps & _READ_ONLY_CAPS:
+            mode = UnifiedApprovalMode.AUTO
+            sandbox = UnifiedSandboxLevel.READ_ONLY
+        else:
+            mode = UnifiedApprovalMode.REVIEW_EDITS
+            sandbox = UnifiedSandboxLevel.WORKSPACE_WRITE
+    elif agent_role in ("planner", "reviewer"):
+        mode = UnifiedApprovalMode.AUTO
+        sandbox = UnifiedSandboxLevel.READ_ONLY
+    else:
+        mode = UnifiedApprovalMode.REVIEW_EDITS
+        sandbox = UnifiedSandboxLevel.WORKSPACE_WRITE
+    return _apply_global_approval_policy(mode), sandbox
 
 
 async def _get_agent_record(

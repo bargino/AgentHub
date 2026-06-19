@@ -4,7 +4,8 @@
 产出 + 标注 expect_pass。正样本应被 judge 判为达标；负样本（错误/缺失产出）应被门禁拦下。
 跑 golden set 得到「judge 与标注一致率（accuracy）」与「正样本通过率」，作为质量门禁基线。
 
-与运行时复审同口径：rubric 也来自 EARS 验收（Phase 3：计划=评测），保证离线评测与线上一致。
+rubric 与运行时 reviewer 同源（都来自 EARS 验收，Phase 3：计划=评测），但判定机制不同：
+离线用 1-5 judge，运行时用 reviewer 的 approve/needs_changes 裁决（见 orchestrator/review.py）。
 """
 
 from __future__ import annotations
@@ -120,6 +121,41 @@ def build_golden_set() -> list[GoldenCase]:
                 "    return db.query(Item).all()  # 没分页、也没返回 total\n"
                 "```"
             ),
+            expect_pass=False,
+        ),
+        # ── 结构维度：带事件流，校验编排链路完整性（#11a replay_assert）──────────
+        GoldenCase(
+            name="structure_clean_pipeline",
+            instruction="跑通一个 pipeline 并正确收口。",
+            rubric=rubric_from_acceptance(
+                ["当任务执行完成，编排链路应有规划事件，且每个任务都从 started 到达终态。"]
+            ),
+            actual_output="任务 t1 已 started→completed，链路完整。",
+            events=[
+                {
+                    "event_type": "orchestration.planned",
+                    "payload": {"mode": "pipeline", "taskCount": 1},
+                },
+                {"event_type": "started", "task_id": "t1", "payload": {}},
+                {"event_type": "completed", "task_id": "t1", "payload": {}},
+            ],
+            expect_pass=True,
+        ),
+        GoldenCase(
+            name="structure_zombie_running",
+            instruction="跑通一个 pipeline 并正确收口。",
+            rubric=rubric_from_acceptance(
+                ["当任务执行完成，编排链路应有规划事件，且每个任务都从 started 到达终态。"]
+            ),
+            # 文本看似 OK，但事件流缺 t1 终态 → 僵尸 running，结构断言应拦下（与质量分无关）
+            actual_output="任务 t1 已 started→completed，链路完整。",
+            events=[
+                {
+                    "event_type": "orchestration.planned",
+                    "payload": {"mode": "pipeline", "taskCount": 1},
+                },
+                {"event_type": "started", "task_id": "t1", "payload": {}},
+            ],
             expect_pass=False,
         ),
     ]

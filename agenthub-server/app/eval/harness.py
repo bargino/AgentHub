@@ -36,6 +36,7 @@ class GoldenCase:
 class JudgeResult:
     score: int  # 1-5；0 表示评判不可用
     reason: str = ""
+    available: bool = True  # judge 是否真正产出可用判定；不可用/解析失败=False（不计入准确率）
 
 
 @dataclass
@@ -46,6 +47,7 @@ class CaseReport:
     quality_score: int
     quality_reason: str
     passed: bool
+    judge_available: bool = True  # judge 是否给出可用判定；False 表示该例评测无结论
 
 
 @dataclass
@@ -74,7 +76,9 @@ Scorer = Callable[["GoldenCase"], Awaitable["JudgeResult"]]
 def rubric_from_acceptance(criteria: list[str]) -> str:
     """把任务的 EARS 验收标准拼成 judge rubric（Phase 3：计划=评测，计划即评测标准）。
 
-    供从计划 / Task.acceptance 构造 GoldenCase.rubric，使离线评测与运行时复审同口径。
+    供从计划 / Task.acceptance 构造 GoldenCase.rubric。注意：离线 judge（1-5 打分）与运行时
+    reviewer（approve/needs_changes 裁决，见 orchestrator/review.py）是两套判定机制，仅在
+    「rubric 都源自 EARS 验收」这一输入层面同源；golden 全绿不直接等价于运行时 reviewer 不退化。
     无验收标准时回退到按需求评估，不编造标准。
     """
     items = [c.strip() for c in criteria if c and c.strip()]
@@ -100,7 +104,7 @@ async def run_eval(cases: list[GoldenCase], scorer: Scorer) -> EvalReport:
             structural_ok, issues = True, []
 
         jr = await scorer(case)
-        passed = structural_ok and jr.score >= case.pass_threshold
+        passed = structural_ok and jr.available and jr.score >= case.pass_threshold
         report.cases.append(
             CaseReport(
                 name=case.name,
@@ -109,6 +113,7 @@ async def run_eval(cases: list[GoldenCase], scorer: Scorer) -> EvalReport:
                 quality_score=jr.score,
                 quality_reason=jr.reason,
                 passed=passed,
+                judge_available=jr.available,
             )
         )
     return report
@@ -139,7 +144,7 @@ def _parse_judge_output(raw: str) -> JudgeResult:
         return JudgeResult(score=score, reason=str(data.get("reason", "")).strip()[:200])
     except (json.JSONDecodeError, ValueError, TypeError):
         logger.debug("judge 输出解析失败，回退 score=0", exc_info=True)
-        return JudgeResult(score=0, reason="评判输出解析失败")
+        return JudgeResult(score=0, reason="评判输出解析失败", available=False)
 
 
 async def llm_judge(case: GoldenCase) -> JudgeResult:
@@ -193,4 +198,79 @@ async def llm_judge(case: GoldenCase) -> JudgeResult:
             break
     except Exception:
         logger.warning("llm_judge 失败，回退 score=0", exc_info=True)
-    return JudgeResult(score=0, reason="judge 不可用")
+    return JudgeResult(score=0, reason="judge 不可用", available=False)
+
+
+async def reviewer_scorer(case: GoldenCase) -> JudgeResult:
+    """生产口径 scorer（#1 深层）：跑真实 reviewer 路径——reviewer 系统提示 +
+    REVIEWER_USER_TEMPLATE + parse_review_verdict 裁决解析，与运行时复审完全同口径
+    （同模板 + 同裁决解析），消除离线 1-5 judge 的口径分叉。
+
+    verdict=approve → score=5（达标）；needs_changes → score=1（拦下）。
+    reviewer 不可用 → available=False（不计入准确率）。系统提示用内置 REVIEWER_SYSTEM
+    （含 ===VERDICT=== 格式）；若生产改用 agents/reviewer.md 自定义 system，可在此换 spec。
+    """
+    try:
+        from app.adapters.base import (
+            AdapterContext,
+            UnifiedApprovalMode,
+            UnifiedSandboxLevel,
+        )
+        from app.core.registry import get_global_registry
+        from app.orchestrator.agent_router import PLANNING_PRIORITY
+        from app.orchestrator.prompts import REVIEWER_USER_TEMPLATE, get_role_system_prompt
+        from app.orchestrator.review import VERDICT_NEEDS_CHANGES, parse_review_verdict
+
+        system = get_role_system_prompt("reviewer")
+        body = REVIEWER_USER_TEMPLATE.format(
+            instructions=case.instruction,
+            acceptance=case.rubric,
+            diff_text=case.actual_output or "（无 Diff）",
+        )
+
+        def _verdict_to_result(raw: str) -> JudgeResult:
+            verdict, issues = parse_review_verdict(raw)
+            approved = verdict != VERDICT_NEEDS_CHANGES
+            joined = "; ".join(issues)[:120]
+            return JudgeResult(
+                score=5 if approved else 1,
+                reason="approve" if approved else f"needs_changes: {joined}",
+            )
+
+        registry = get_global_registry()
+        for adapter_name in PLANNING_PRIORITY:
+            adapter = registry.get(adapter_name)
+            if adapter is None:
+                continue
+            try:
+                if not await adapter.health_check():
+                    continue
+            except Exception:
+                continue
+
+            ctx = AdapterContext(
+                instructions=body,
+                system_prompt=system or None,
+                workspace_path=".",
+                approval_mode=UnifiedApprovalMode.AUTO,
+                sandbox_level=UnifiedSandboxLevel.READ_ONLY,
+                model=adapter.light_model,
+            )
+            parts: list[str] = []
+            async for event in adapter.execute(ctx):
+                if event.type == "completed":
+                    return _verdict_to_result(
+                        str(event.data.get("result", "")) or "".join(parts)
+                    )
+                if event.type == "thinking":
+                    t = str(event.data.get("text", ""))
+                    if t:
+                        parts.append(t)
+                elif event.type == "error":
+                    break
+            if parts:
+                return _verdict_to_result("".join(parts))
+            break
+    except Exception:
+        logger.warning("reviewer_scorer 失败，回退 available=False", exc_info=True)
+    return JudgeResult(score=0, reason="reviewer 不可用", available=False)

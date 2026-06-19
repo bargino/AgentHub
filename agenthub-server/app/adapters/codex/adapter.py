@@ -199,7 +199,7 @@ class CodexAdapter(ICodeAdapter):
 
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[UnifiedEvent | None] = asyncio.Queue()
-        execute_id = uuid.uuid4().hex
+        execute_id = ctx.execution_tag or uuid.uuid4().hex
         active = _ActiveExecution()
         self._active[execute_id] = active
         # item_id -> changes 摘要，fileChange 审批弹窗据此展示 diff（跨线程只读）
@@ -433,10 +433,16 @@ class CodexAdapter(ICodeAdapter):
         pending.event.set()
         return True
 
-    async def interrupt(self) -> bool:
-        """中断全部在途执行：先解除审批阻塞，再发 turn/interrupt。"""
+    async def interrupt(self, execution_tag: str | None = None) -> bool:
+        """中断在途执行；execution_tag 指定时仅取消该次 execute。"""
+        if execution_tag and execution_tag in self._active:
+            actives = [self._active[execution_tag]]
+        elif execution_tag:
+            return False
+        else:
+            actives = list(self._active.values())
         interrupted = False
-        for active in list(self._active.values()):
+        for active in actives:
             for request_id in list(active.pending_ids):
                 pending = self._pending.get(request_id)
                 if pending is not None:

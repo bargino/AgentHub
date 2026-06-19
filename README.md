@@ -118,7 +118,8 @@ flowchart TB
 
 - **Node.js** ≥ 18（建议 20 LTS）+ npm
 - **Python** 3.11
-- **Conda**（推荐）：为后端依赖建一个独立环境。客户端解释器解析优先级：`AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名，定位 `conda info --base` 下的 `envs/<名字>`）> PATH 上的 `python` / `python3`。
+- **独立 Python 环境（推荐）**：后端/测试/脚本**必须**在 `conda activate <env>` 下运行，或显式使用 `<python-path>`。**禁止**用 base miniconda 默认 `python`。
+- **Conda**（推荐）：客户端解释器解析优先级：`AGENTHUB_PYTHON`（完整路径）> `AGENTHUB_CONDA_ENV`（环境名，名称自取）> PATH 上的 `python`。
 - 至少一个 Agent SDK（`claude-agent-sdk` 或 `openai-codex`）；运行时按健康检查自动探测可用性。
 
 ### 1️⃣ 后端（agenthub-server）

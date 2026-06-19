@@ -79,6 +79,8 @@ class AdapterContext:
     # ① 稳定前缀（角色系统提示 + 安全约束 + 规则/宪法）：claude 走 system_prompt preset+append
     # 享自动 prompt 缓存；codex 前置拼到 turn 内容。None = 不拆分（行为同前）。
     system_prompt: Optional[str] = None
+    # 单次 execute 隔离键（通常为 db task id）：scoped interrupt / 并发审批表隔离
+    execution_tag: Optional[str] = None
 
 
 class ICodeAdapter(ABC):
@@ -103,7 +105,7 @@ class ICodeAdapter(ABC):
         ...
 
     @abstractmethod
-    async def interrupt(self) -> bool:
+    async def interrupt(self, execution_tag: str | None = None) -> bool:
         ...
 
     @property

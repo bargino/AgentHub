@@ -12,16 +12,31 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 
+ApprovalPolicy = Literal["auto", "review", "deny_all"]
+
+
 class AppSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8642
     debug: bool = False
     # 写型任务成功后是否自动提交（推进基线）；默认仅 git add 暂存，避免意外推进基线
     auto_commit_on_task: bool = False
+    # 全局审批策略：review=桌面默认（写操作人工审批）；auto=headless/CI 自动放行（仍走白名单+路径围栏）；
+    # deny_all=全部拒绝写与命令。环境变量 AGENTHUB_APPROVAL_POLICY 覆盖。
+    approval_policy: ApprovalPolicy = "review"
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+
+def resolve_approval_policy() -> ApprovalPolicy:
+    """解析 AGENTHUB_APPROVAL_POLICY；非法值回退 review。"""
+    raw = (os.environ.get("AGENTHUB_APPROVAL_POLICY") or get_settings().approval_policy or "review")
+    raw = str(raw).strip().lower()
+    if raw in ("auto", "review", "deny_all"):
+        return raw  # type: ignore[return-value]
+    return "review"
 
 
 _settings: AppSettings | None = None

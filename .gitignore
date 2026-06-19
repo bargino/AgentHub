@@ -49,3 +49,7 @@ MiMo-Code/
 # 文档和资源（本地资料不上传）
 docs/
 logos/
+
+# Eval 跑分历史与缓存（生成产物）
+**/.eval_history.jsonl
+.ruff_cache/

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -196,6 +197,9 @@ class TaskRunner:
         # _finalize_on_fail=False 时硬失败只清理不置 failed；_hard_failed 区分硬失败与用户取消。
         self._finalize_on_fail: bool = True
         self._hard_failed: bool = False
+        # 审批等待不计入 agent 总超时（人机交互 grace）
+        self._approval_pause_started: float | None = None
+        self._approval_pause_total: float = 0.0
 
     async def run(self) -> bool:
         """返回任务是否成功。
@@ -255,6 +259,7 @@ class TaskRunner:
                     adapter_name=adapter_name,
                     blackboard=board,
                 )
+                ctx = replace(ctx, execution_tag=self.db_task_id)
 
             # 写型任务（非只读沙箱）串行持锁：会话级单 workspace 下避免并行写覆盖；
             # 只读任务不持锁，保留并行收益
@@ -315,19 +320,27 @@ class TaskRunner:
         except Exception:
             logger.debug("stage changes failed", exc_info=True)
 
+    def _effective_work_elapsed(self, started: float) -> float:
+        """扣除审批等待后的有效执行时长（秒）。"""
+        now = time.monotonic()
+        paused = self._approval_pause_total
+        if self._approval_pause_started is not None:
+            paused += now - self._approval_pause_started
+        return max(0.0, (now - started) - paused)
+
     async def _consume(self, adapter: Any, ctx: Any) -> bool:
         """消费适配器事件流（全局并发限流 + 可选总超时），返回任务是否成功。"""
+        self._approval_pause_started = None
+        self._approval_pause_total = 0.0
         try:
             async with _agent_semaphore:
                 if _AGENT_TIMEOUT_S > 0:
-                    return await asyncio.wait_for(
-                        self._drain(adapter, ctx), timeout=_AGENT_TIMEOUT_S
-                    )
+                    return await self._drain_with_timeout(adapter, ctx, _AGENT_TIMEOUT_S)
                 return await self._drain(adapter, ctx)
         except asyncio.TimeoutError:
             logger.warning("Task %s timed out after %ss", self.db_task_id, _AGENT_TIMEOUT_S)
             try:
-                await adapter.interrupt()
+                await adapter.interrupt(execution_tag=self.db_task_id)
             except Exception:
                 logger.debug("interrupt after timeout failed", exc_info=True)
             self._hard_failed = True
@@ -338,6 +351,23 @@ class TaskRunner:
             self._hard_failed = True
             await self._finalize_or_cleanup(f"执行异常：{e}")
             return False
+
+    async def _drain_with_timeout(self, adapter: Any, ctx: Any, timeout_s: float) -> bool:
+        started = time.monotonic()
+        drain_task = asyncio.create_task(self._drain(adapter, ctx))
+        try:
+            while not drain_task.done():
+                if self._effective_work_elapsed(started) >= timeout_s:
+                    drain_task.cancel()
+                    try:
+                        await drain_task
+                    except asyncio.CancelledError:
+                        pass
+                    raise asyncio.TimeoutError()
+                await asyncio.sleep(0.25)
+            return drain_task.result()
+        except asyncio.CancelledError:
+            raise asyncio.TimeoutError() from None
 
     async def _drain(self, adapter: Any, ctx: Any) -> bool:
         """逐个消费事件流，返回是否成功。"""
@@ -502,6 +532,7 @@ class TaskRunner:
             return None
 
         if event.type == "approval_request":
+            self._approval_pause_started = time.monotonic()
             request_id = str(event.data.get("request_id", ""))
             action_type = str(event.data.get("action_type", "run_command"))
             changes = event.data.get("changes") or []
@@ -556,6 +587,9 @@ class TaskRunner:
             return None
 
         if event.type == "approval_resolved":
+            if self._approval_pause_started is not None:
+                self._approval_pause_total += time.monotonic() - self._approval_pause_started
+                self._approval_pause_started = None
             async with factory() as session:
                 async with session.begin():
                     await task_service.update_task_status(session, self.db_task_id, "running")

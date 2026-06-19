@@ -85,6 +85,8 @@ def build_hooks(
     pending_approvals: dict[str, asyncio.Event],
     approval_decisions: dict[str, bool],
     workspace_path: str | None = None,
+    on_pending_register: Callable[[str], None] | None = None,
+    on_pending_clear: Callable[[str], None] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     def emit_blocked(tool_name: str, reason: str, detail: dict[str, Any]) -> None:
         on_event(
@@ -106,6 +108,8 @@ def build_hooks(
         request_id = f"cc_{tool_use_id}"
         event = asyncio.Event()
         pending_approvals[request_id] = event
+        if on_pending_register is not None:
+            on_pending_register(request_id)
 
         # 统一审批契约：文件写工具标 apply_diff 并附 changes（审查界面据此渲染内联
         # diff），命令标 run_command；不再让 executor 回退默认 run_command 而丢 diff。
@@ -146,6 +150,8 @@ def build_hooks(
             approval_decisions.setdefault(request_id, False)
         finally:
             pending_approvals.pop(request_id, None)
+            if on_pending_clear is not None:
+                on_pending_clear(request_id)
 
         if approval_decisions.get(request_id, False):
             return {}

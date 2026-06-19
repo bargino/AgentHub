@@ -53,25 +53,81 @@ def _bootstrap_registry() -> None:
     set_global_registry(registry)
 
 
-async def _run(offline: bool, threshold: float) -> int:
+def _check_verdict_parser() -> list[str]:
+    """#1 离线确定性自检：覆盖运行时 reviewer 的裁决解析 parse_review_verdict（无需 LLM）。
+
+    把代表性 reviewer 原始输出喂进生产解析器，断言 verdict / issues 行为正确；
+    返回失败项列表（空=全过）。
+    """
+    from app.orchestrator.review import parse_review_verdict
+
+    samples: list[tuple[str, str, bool]] = [
+        # (reviewer 原始输出, 期望 verdict, 期望 issues 非空)
+        (
+            '## 审查结论\n通过\n===VERDICT===\n{"verdict": "approve", "issues": []}',
+            "approve",
+            False,
+        ),
+        (
+            '## 审查结论\n需修改\n===VERDICT===\n'
+            '{"verdict": "needs_changes", "issues": ["缺少 total 字段"]}',
+            "needs_changes",
+            True,
+        ),
+        ("纯文本无裁决 marker", "approve", False),  # fail-open 到 approve
+        ("===VERDICT===\n{坏 JSON", "approve", False),  # 解析失败 fail-open
+    ]
+    fails: list[str] = []
+    for raw, exp_verdict, exp_issues in samples:
+        verdict, issues = parse_review_verdict(raw)
+        if verdict != exp_verdict:
+            fails.append(f"verdict 期望 {exp_verdict} 实得 {verdict}（{raw[:24]}…）")
+        if bool(issues) != exp_issues:
+            fails.append(f"issues 期望非空={exp_issues} 实得 {issues}（{raw[:24]}…）")
+    return fails
+
+
+async def _run(offline: bool, reviewer: bool, threshold: float) -> int:
+    # #1 深层：每次先离线确定性自检生产 reviewer 的裁决解析（parse_review_verdict）
+    parser_fails = _check_verdict_parser()
+    print("verdict-parser self-check:", "PASS" if not parser_fails else "FAIL")
+    for f in parser_fails:
+        print(f"  - {f}")
+
     cases = build_golden_set()
     if offline:
         scorer = _offline_scorer
+        mode = "offline-stub"
+    elif reviewer:
+        _bootstrap_registry()
+        from app.eval.harness import reviewer_scorer
+
+        scorer = reviewer_scorer
+        mode = "reviewer(production)"
     else:
         _bootstrap_registry()
         from app.eval.harness import llm_judge
 
         scorer = llm_judge
+        mode = "llm-judge"
 
     report = await run_eval(cases, scorer)
     expect = {c.name: c.expect_pass for c in cases}
 
-    # 逐例打印
+    # 逐例打印（judge 不可用的例子标 N/A，不计入准确率）
     print(f"{'CASE':<28} {'EXPECT':<7} {'SCORE':<6} {'PASSED':<7} OK")
-    matches = 0
+    matches = conclusive = inconclusive = 0
     pos_total = pos_pass = neg_total = neg_caught = 0
     for cr in report.cases:
         exp = expect.get(cr.name, True)
+        if not cr.judge_available:
+            inconclusive += 1
+            print(
+                f"{cr.name:<28} {('pass' if exp else 'fail'):<7} "
+                f"{'-':<6} {'N/A':<7} ?  {cr.quality_reason}（judge 不可用，不计准确率）"
+            )
+            continue
+        conclusive += 1
         ok = cr.passed == exp  # judge 与标注一致
         matches += int(ok)
         if exp:
@@ -86,19 +142,62 @@ async def _run(offline: bool, threshold: float) -> int:
             f"{cr.quality_score:<6} {str(cr.passed):<7} {flag}  {cr.quality_reason}"
         )
 
-    total = report.total
-    accuracy = matches / total if total else 0.0
+    accuracy = matches / conclusive if conclusive else 0.0
     print("-" * 64)
-    print(f"accuracy      = {accuracy:.0%}  ({matches}/{total})")
+    print(f"accuracy      = {accuracy:.0%}  ({matches}/{conclusive} 可判定)")
     if pos_total:
         print(f"positive_pass = {pos_pass / pos_total:.0%}  ({pos_pass}/{pos_total})")
     if neg_total:
         print(f"negative_caught = {neg_caught / neg_total:.0%}  ({neg_caught}/{neg_total})")
-    print(f"mode = {'offline-stub' if offline else 'llm-judge'}  threshold = {threshold:.0%}")
+    if inconclusive:
+        print(f"inconclusive  = {inconclusive}  (judge 不可用，已排除；real 模式视为失败)")
+    print(f"mode = {mode}  threshold = {threshold:.0%}")
 
-    ok = accuracy >= threshold
+    # #4 趋势留存：每次跑分追加一行历史
+    _append_history(
+        mode, accuracy, matches, conclusive, inconclusive,
+        pos_pass, pos_total, neg_caught, neg_total,
+    )
+
+    # judge 不可用 = 评测无结论：real 模式直接判失败；裁决解析自检失败也判失败
+    ok = accuracy >= threshold and inconclusive == 0 and not parser_fails
     print("RESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def _append_history(
+    mode: str,
+    accuracy: float,
+    matches: int,
+    conclusive: int,
+    inconclusive: int,
+    pos_pass: int,
+    pos_total: int,
+    neg_caught: int,
+    neg_total: int,
+) -> None:
+    """#4 把本次跑分结果追加到 .eval_history.jsonl（趋势留存）；写失败只告警不阻塞。"""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    record = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "mode": mode,
+        "accuracy": round(accuracy, 4),
+        "matches": matches,
+        "conclusive": conclusive,
+        "inconclusive": inconclusive,
+        "positive_pass": f"{pos_pass}/{pos_total}",
+        "negative_caught": f"{neg_caught}/{neg_total}",
+    }
+    try:
+        path = Path(__file__).resolve().parent / ".eval_history.jsonl"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"history -> {path}")
+    except OSError:
+        pass
 
 
 def main() -> None:
@@ -111,10 +210,15 @@ def main() -> None:
         "--offline", action="store_true", help="用确定性桩 judge（零 LLM 成本，验证管线）"
     )
     ap.add_argument(
+        "--reviewer",
+        action="store_true",
+        help="生产口径：跑真实 reviewer（同 prompt + parse_review_verdict）而非独立 judge",
+    )
+    ap.add_argument(
         "--threshold", type=float, default=0.8, help="accuracy 门禁阈值（默认 0.8）"
     )
     args = ap.parse_args()
-    sys.exit(asyncio.run(_run(args.offline, args.threshold)))
+    sys.exit(asyncio.run(_run(args.offline, args.reviewer, args.threshold)))
 
 
 if __name__ == "__main__":
