@@ -23,6 +23,7 @@ from app.orchestrator.prompts import (
 from app.orchestrator.task_planner import PlannedTask
 from app.services import agent_session as agent_session_service
 from app.services import message as message_service
+from app.services.provider import resolve_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
@@ -347,12 +348,24 @@ async def build_context(
         task.agent, record.capabilities if record else None
     )
 
-    # Agent 注册的专属模型与供应商配置（空值不传，回退本地 SDK 登录态/默认模型）
-    model = (record.model or None) if record else None
+    # Agent 注册的专属模型与供应商配置（空值不传，回退本地 SDK 登录态/默认模型）；
+    # model 与 provider 都按「实际运行的适配器 + default/custom 模式」从对应适配器槽解析，
+    # 二者绑定（避免切适配器后用到供应商不存在的模型）。default 不注入凭据（走本地登录态）。
+    model: str | None = None
     provider: dict[str, str] | None = None
-    if record and record.provider_config:
-        cleaned = {k: v.strip() for k, v in record.provider_config.items() if isinstance(v, str) and v.strip()}
-        provider = cleaned or None
+    if record:
+        eff_adapter = adapter_name or record.adapter_type
+        model = resolve_model(
+            record.provider_config,
+            eff_adapter,
+            legacy_adapter=record.adapter_type,
+            legacy_model=record.model,
+        )
+        provider = resolve_provider(
+            record.provider_config,
+            eff_adapter,
+            legacy_adapter=record.adapter_type,
+        )
 
     # per-agent MCP：capabilities.mcp_servers 为允许的 server 名清单时按其过滤全局；
     # 未声明（无该键）则 None —— adapter 回退全局全集，向后兼容

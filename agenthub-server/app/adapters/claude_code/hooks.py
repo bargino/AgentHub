@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import os
+import re
 from typing import Any, Callable
 
 from claude_agent_sdk import HookMatcher
@@ -28,7 +31,54 @@ FILE_WRITE_TOOLS = frozenset({"Edit", "MultiEdit", "Write", "NotebookEdit"})
 # 只读文件工具（只做路径围栏，不审批）
 FILE_READ_TOOLS = frozenset({"Read"})
 
-HOOK_MATCHER = "Read|Edit|MultiEdit|Write|NotebookEdit|Bash"
+# Epic C：把 mcp__* 工具纳入 PreToolUse 围栏（原 matcher 不含 → 写/执行类 MCP 绕过审批）
+HOOK_MATCHER = "Read|Edit|MultiEdit|Write|NotebookEdit|Bash|mcp__.*"
+
+# MCP 工具名启发式只读动词（保守：仅明确只读放行，其余视为写/执行需审批）
+_MCP_READONLY_VERBS = (
+    "read", "get", "list", "search", "fetch", "query", "describe", "view",
+    "show", "find", "lookup", "info", "stat", "status", "count", "exists", "head",
+)
+_MCP_READONLY_RE = re.compile(
+    r"(?:^|_)(" + "|".join(_MCP_READONLY_VERBS) + r")(?:_|$)", re.IGNORECASE
+)
+
+
+def _mcp_patterns(var: str) -> tuple[str, ...]:
+    """读取逗号分隔的 MCP 工具能力清单（支持 fnmatch 通配，如 mcp__db__*）。"""
+    return tuple(p.strip() for p in os.environ.get(var, "").split(",") if p.strip())
+
+
+def _matches_any(tool_name: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(tool_name, p) for p in patterns)
+
+
+def _is_readonly_mcp(tool_name: str) -> bool:
+    """MCP 工具只读判定（能力清单优先，启发式兜底，默认保守视为写）。
+
+    优先级（devsecops 显式 allowlist > 猜测）：
+    1. 显式写清单 AGENTHUB_MCP_WRITE_TOOLS → 写（需审批，安全优先，覆盖一切）
+    2. 显式只读清单 AGENTHUB_MCP_READONLY_TOOLS → 只读放行
+    3. 工具名只读动词启发式（read/get/list/...）→ 只读
+    4. 默认 → 写（需审批，最小权限保守默认）
+    清单为逗号分隔、支持 fnmatch 通配（如 mcp__report__* / mcp__fs__read_*）。
+    """
+    if _matches_any(tool_name, _mcp_patterns("AGENTHUB_MCP_WRITE_TOOLS")):
+        return False
+    if _matches_any(tool_name, _mcp_patterns("AGENTHUB_MCP_READONLY_TOOLS")):
+        return True
+    leaf = tool_name.rsplit("__", 1)[-1]
+    return bool(_MCP_READONLY_RE.search(leaf))
+
+
+def _auto_strict_enabled() -> bool:
+    """AUTO 严格模式开关（AGENTHUB_AUTO_STRICT，默认开）。
+
+    开启时 AUTO 下非白名单写/命令降级为人工审批；设 0/false/off/no 恢复原全自动放行。
+    """
+    return os.environ.get("AGENTHUB_AUTO_STRICT", "1").strip().lower() not in (
+        "0", "false", "off", "no",
+    )
 
 
 def _deny(input_data: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -119,6 +169,12 @@ def build_hooks(
             changes = _changes_from_tool_input(tool_name, tool_input)
             file_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
             summary = f"应用代码变更：{file_path}" if file_path else "应用代码变更"
+        elif tool_name.startswith("mcp__"):
+            # 写/执行类 MCP（Epic C）：复用命令审批通道，标注来源便于审查
+            action_type = "run_command"
+            changes = []
+            file_path = ""
+            summary = f"MCP 工具调用：{tool_name}"
         else:
             action_type = "run_command"
             changes = []
@@ -178,6 +234,10 @@ def build_hooks(
         if tool_name in FILE_READ_TOOLS:
             return {}
 
+        # 1b. MCP 工具围栏（Epic C）：只读类放行；写/执行类继续走下方模式门控（审批/拒绝）
+        if tool_name.startswith("mcp__") and _is_readonly_mcp(tool_name):
+            return {}
+
         # 2. Bash 命令白名单三级判定（所有模式下 BLOCKED 都直接拒绝）
         command_verdict: CommandVerdict | None = None
         if tool_name == "Bash":
@@ -195,16 +255,25 @@ def build_hooks(
             return _deny(input_data, reason)
 
         if approval_mode == UnifiedApprovalMode.AUTO:
-            # AUTO 模式自动放行（危险项已在上面硬拦截）
-            return {}
+            # AUTO 模式：危险项已在上面硬拦截。默认严格（AGENTHUB_AUTO_STRICT）下仅白名单命令
+            # 自动放行，文件写 / 非白名单命令 / 写类 MCP 降级为人工审批；关闭严格则恢复原全自动。
+            if not _auto_strict_enabled() or command_verdict == CommandVerdict.ALLOWED:
+                return {}
+            return await request_user_approval(
+                input_data, tool_use_id, tool_name, tool_input,
+                "AUTO 严格模式：非白名单写/命令需人工审批",
+            )
 
         # REVIEW_EDITS：白名单内命令放行，其余进人工审批
         if command_verdict == CommandVerdict.ALLOWED:
             return {}
 
-        approval_reason = (
-            "非白名单命令，需人工审批" if tool_name == "Bash" else "文件修改操作，需人工审批"
-        )
+        if tool_name == "Bash":
+            approval_reason = "非白名单命令，需人工审批"
+        elif tool_name.startswith("mcp__"):
+            approval_reason = "MCP 写/执行类工具，需人工审批"
+        else:
+            approval_reason = "文件修改操作，需人工审批"
         return await request_user_approval(
             input_data, tool_use_id, tool_name, tool_input, approval_reason
         )

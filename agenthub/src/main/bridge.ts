@@ -70,7 +70,13 @@ export function getBridgeStatus(): BridgeStatus {
   return status
 }
 
-function handleFrame(frame: { kind?: string; id?: unknown; event?: unknown; status?: number; body?: unknown }): void {
+function handleFrame(frame: {
+  kind?: string
+  id?: unknown
+  event?: unknown
+  status?: number
+  body?: unknown
+}): void {
   switch (frame.kind) {
     case 'ready':
       setStatus('connected')

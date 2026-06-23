@@ -803,7 +803,7 @@ export function AddSkillMenu({
         onClick={() => (open ? close() : setOpen(true))}
         title={tr('manage.addSkill.title')}
         className="btn-press w-7 h-7 rounded-lg flex items-center justify-center text-white"
-        style={{ background: 'var(--gradient-brand)', boxShadow: '0 2px 8px rgba(37,99,235,0.3)' }}
+        style={{ background: 'var(--gradient-brand)', boxShadow: 'var(--shadow-sm)' }}
       >
         <Plus size={15} />
       </button>

@@ -7,7 +7,8 @@ import type {
   Approval,
   Agent,
   AgentRole,
-  RightTab
+  RightTab,
+  Deployment
 } from '../types'
 import * as api from '../services/api'
 import { formatTime } from '../services/api'
@@ -27,6 +28,8 @@ const APPROVAL_ACTION_KEYS: Record<string, string> = {
   deploy: 'approval.action.deploy'
 }
 
+/** 顶级页面：会话工作区 / Agent 目录 / 管理中心 / 设置；
+ *  任务/Diff/预览/部署 已迁至会话右侧工作区 dock（见 RightTab），不再作为顶级页面。 */
 export type PageType = 'chat' | 'agents' | 'manage' | 'settings'
 
 interface AppState {
@@ -42,11 +45,17 @@ interface AppState {
   /** 会话内全部待决审批（按创建时间升序），支持多 Agent 并发审查 */
   pendingApprovals: Approval[]
   previewUrl: string | null
+  /** 各会话最近一次部署记录（id -> Deployment，按 conversationId 键） */
+  deployments: Record<string, Deployment>
+  /** 部署请求进行中（创建/审批），用于禁用按钮 */
+  deployBusy: boolean
   draftMessage: string | null
   /** 引用回复目标（发送时拼为 Markdown 引用块前缀） */
   replyingTo: Message | null
   /** 右侧停靠区当前 tab（单实例 + tab 切换，消除横向挤压）；null = 收起 */
   rightTab: RightTab | null
+  /** 右侧工作区是否展开接管中间区（A2 全屏态） */
+  rightExpanded: boolean
   groupPanelOpen: boolean
   /** 新建项目弹窗（会话列表 + 聊天空态引导卡共用） */
   newProjectOpen: boolean
@@ -72,6 +81,10 @@ interface AppState {
   refreshContextUsage: () => Promise<void>
   approveDiff: () => Promise<void>
   rejectDiff: () => Promise<void>
+  /** 为当前会话创建部署计划（status=planned，待审批） */
+  startDeployment: (opts?: { provider?: string; config?: Record<string, unknown> }) => Promise<void>
+  /** 审批当前会话的部署：approved 执行模拟部署，否则置为 rejected */
+  decideDeployment: (approved: boolean) => Promise<void>
   /** 按 id 确保 diff 已在缓存（审查界面联动 apply_diff 审批的关联 diff） */
   ensureDiff: (diffId: string) => Promise<void>
   /** 决策单条审批：直接 resolve（释放 agent 阻塞 + 级联 diff 状态），乐观移除 */
@@ -101,6 +114,8 @@ interface AppState {
   setActivePage: (page: PageType) => void
   /** 切换右侧 tab：传入当前 tab 则收起（toggle 语义）；切 tab 自动收起群设置 */
   setRightTab: (tab: RightTab | null) => void
+  /** 设置右侧工作区展开态（A2：接管中间区） */
+  setRightExpanded: (expanded: boolean) => void
   toggleGroupPanel: () => void
 }
 
@@ -125,10 +140,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   diffsById: {},
   pendingApprovals: [],
   previewUrl: null,
+  deployments: {},
+  deployBusy: false,
   draftMessage: null,
   bridgeError: null,
   replyingTo: null,
   rightTab: null,
+  rightExpanded: false,
   groupPanelOpen: false,
   newProjectOpen: false,
   contextUsage: null,
@@ -274,6 +292,37 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ activeDiff: diff, diffsById: { ...s.diffsById, [diff.id]: diff } }))
   },
 
+  startDeployment: async (opts) => {
+    const { activeConversationId, deployBusy } = get()
+    if (!activeConversationId || deployBusy) return
+    set({ deployBusy: true })
+    try {
+      const dep = await api.createDeployment(activeConversationId, opts)
+      set((s) => ({ deployments: { ...s.deployments, [dep.conversationId]: dep } }))
+    } catch (err) {
+      notify.error(t('store.deployFailed'), err instanceof Error ? err.message : t('errors.retry'))
+    } finally {
+      set({ deployBusy: false })
+    }
+  },
+
+  decideDeployment: async (approved) => {
+    const { activeConversationId, deployBusy } = get()
+    const cid = activeConversationId
+    if (!cid || deployBusy) return
+    const dep = get().deployments[cid]
+    if (!dep) return
+    set({ deployBusy: true })
+    try {
+      const next = await api.decideDeployment(dep.id, approved)
+      set((s) => ({ deployments: { ...s.deployments, [next.conversationId]: next } }))
+    } catch (err) {
+      notify.error(t('store.deployFailed'), err instanceof Error ? err.message : t('errors.retry'))
+    } finally {
+      set({ deployBusy: false })
+    }
+  },
+
   ensureDiff: async (diffId) => {
     if (!diffId || get().diffsById[diffId]) return
     try {
@@ -357,10 +406,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   setReplyingTo: (msg) => set({ replyingTo: msg }),
   setNewProjectOpen: (open) => set({ newProjectOpen: open }),
   setActivePage: (page) => set({ activePage: page }),
-  // 右侧停靠区单实例：切 tab（再次点击当前 tab 收起），并互斥关闭群设置
+  // 右侧停靠区单实例：切 tab（再次点击当前 tab 收起），并互斥关闭群设置；收起时退出展开态
   setRightTab: (tab) =>
-    set((s) => ({ rightTab: s.rightTab === tab ? null : tab, groupPanelOpen: false })),
-  toggleGroupPanel: () => set((s) => ({ groupPanelOpen: !s.groupPanelOpen, rightTab: null }))
+    set((s) => {
+      const next = s.rightTab === tab ? null : tab
+      return {
+        rightTab: next,
+        groupPanelOpen: false,
+        rightExpanded: next ? s.rightExpanded : false
+      }
+    }),
+  setRightExpanded: (expanded) => set({ rightExpanded: expanded }),
+  toggleGroupPanel: () =>
+    set((s) => ({ groupPanelOpen: !s.groupPanelOpen, rightTab: null, rightExpanded: false }))
 }))
 
 function appendMessage(conversationId: string, msg: Message): void {
@@ -643,6 +701,54 @@ function handleWsEvent(frame: WsServerFrame): void {
           groupPanelOpen: false
         })
       }
+      return
+    }
+    case 'deploy.started': {
+      // 部署开始（手动发起或 Deployer agent 触发）：用事件内 plan 建/并记录，状态置 deploying
+      if (!cid) return
+      const d = frame.data as { deploymentId: string; plan?: Deployment['plan']; provider?: string }
+      useAppStore.setState((s) => {
+        const prev = s.deployments[cid]
+        const merged: Deployment = {
+          id: d.deploymentId,
+          conversationId: cid,
+          status: 'deploying',
+          provider: d.provider ?? prev?.provider ?? 'docker',
+          plan: d.plan ?? prev?.plan ?? { target: '', steps: [], rollback: '', project: '' },
+          logs: prev?.logs ?? '',
+          resultUrl: prev?.resultUrl ?? null
+        }
+        return { deployments: { ...s.deployments, [cid]: merged } }
+      })
+      return
+    }
+    case 'deploy.finished': {
+      if (!cid) return
+      const d = frame.data as {
+        deploymentId: string
+        status?: Deployment['status']
+        resultUrl?: string | null
+        logs?: string
+      }
+      let justSucceeded = false
+      useAppStore.setState((s) => {
+        const prev = s.deployments[cid]
+        if (!prev || prev.id !== d.deploymentId) return {}
+        const status = d.status ?? 'success'
+        if (status === 'success') justSucceeded = true
+        return {
+          deployments: {
+            ...s.deployments,
+            [cid]: {
+              ...prev,
+              status,
+              logs: d.logs ?? prev.logs,
+              resultUrl: d.resultUrl ?? prev.resultUrl
+            }
+          }
+        }
+      })
+      if (justSucceeded) notify.success(t('store.deployDone'))
       return
     }
     case 'error': {

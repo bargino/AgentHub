@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Bot, Plus, Settings, Power, X, Check, Lock } from 'lucide-react'
+import { Bot, Plus, Settings, Power, X, Check, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
 import { getRoleColor } from '../ui/role'
-import { updateAgent, createAgent } from '../../services/api'
+import { updateAgent, createAgent, scanProvider } from '../../services/api'
 import { useAppStore } from '../../store'
 import { notify } from '../../services/notify'
 import { useT } from '../../i18n'
 import { Modal } from '../ui/Modal'
 import { StateView } from '../ui/StateView'
-import type { Agent } from '../../types'
+import type { Agent, ProviderConfig, ProviderConfigMap, ProviderScan } from '../../types'
 
 import codexLogo from '../../assets/logos/codex.webp'
 import claudeLogo from '../../assets/logos/claude.png'
@@ -35,6 +35,33 @@ const ROLE_DESC_KEY: Record<string, string> = {
 const BUILTIN_ROLES = ['planner', 'coder', 'reviewer', 'deployer']
 const ADAPTER_TYPES = ['claude-code', 'codex']
 
+function emptyProvider(): ProviderConfig {
+  return { mode: 'default', baseUrl: '', authToken: '', model: '' }
+}
+
+/** 补全为「按适配器分组」的完整 map（两个适配器槽都在），兼容后端归一化后的数据。
+ *  legacyAdapter+legacyModel：把旧的顶层 model 归并到对应适配器槽（仅当该槽无 model）。 */
+function normalizeProviders(
+  pc: ProviderConfigMap | undefined,
+  legacyAdapter?: string,
+  legacyModel?: string
+): ProviderConfigMap {
+  const out: ProviderConfigMap = {}
+  for (const k of ADAPTER_TYPES) {
+    const e = pc?.[k]
+    out[k] = {
+      mode: e?.mode === 'custom' ? 'custom' : 'default',
+      baseUrl: e?.baseUrl ?? '',
+      authToken: e?.authToken ?? '',
+      model: e?.model ?? ''
+    }
+  }
+  if (legacyModel && legacyAdapter && out[legacyAdapter] && !out[legacyAdapter].model) {
+    out[legacyAdapter] = { ...out[legacyAdapter], model: legacyModel }
+  }
+  return out
+}
+
 // 各适配器的常见模型建议（datalist，可手填任意模型名；空 = SDK 默认模型）
 const MODEL_SUGGESTIONS: Record<string, string[]> = {
   'claude-code': ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'],
@@ -55,9 +82,230 @@ interface AgentFormValue {
   skills: string
   group: string
   adapterType: string
-  model: string
-  baseUrl: string
-  authToken: string
+  /** 按适配器分组的供应商配置（含 model，codex / claude-code 各自独立保存） */
+  providers: ProviderConfigMap
+}
+
+/** 单个适配器的供应商配置区：默认（扫描本地 CLI 配置回显）/ 自定义（填 base_url+apikey）。 */
+function ProviderSection({
+  adapter,
+  entry,
+  onChange
+}: {
+  adapter: string
+  entry: ProviderConfig
+  onChange: (e: ProviderConfig) => void
+}): React.JSX.Element {
+  const tr = useT()
+  const [scan, setScan] = useState<ProviderScan | null>(null)
+  const [scanning, setScanning] = useState(false)
+
+  const runScan = (): void => {
+    setScanning(true)
+    scanProvider(adapter)
+      .then((r) => setScan(r))
+      .catch(() => setScan(null))
+      .finally(() => setScanning(false))
+  }
+
+  // 切换适配器时重新扫描本地配置（仅用于「默认」模式回显）
+  useEffect(() => {
+    let cancelled = false
+    setScan(null)
+    setScanning(true)
+    scanProvider(adapter)
+      .then((r) => !cancelled && setScan(r))
+      .catch(() => !cancelled && setScan(null))
+      .finally(() => !cancelled && setScanning(false))
+    return () => {
+      cancelled = true
+    }
+  }, [adapter])
+
+  const adapterLabel = adapter === 'codex' ? 'Codex' : 'Claude Code'
+  const authSourceLabel = (src: string): string =>
+    src ? tr(`agents.form.authSource.${src}`) : tr('agents.form.authSource.none')
+
+  return (
+    <div
+      className="flex flex-col gap-3 p-3 rounded-lg"
+      style={{
+        background: 'var(--color-bg-spotlight)',
+        border: '1px dashed var(--color-border-light)'
+      }}
+    >
+      <div>
+        <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+          {tr('agents.form.provider')}
+          <span style={{ color: 'var(--color-text-tertiary)' }}>（{adapterLabel}）</span>
+        </span>
+        <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
+          {tr('agents.form.providerHint', { adapter: adapterLabel })}
+        </p>
+      </div>
+
+      {/* 模型名（与该适配器供应商绑定，按适配器各自保存） */}
+      <div>
+        <label
+          className="block text-xs font-medium mb-1.5"
+          style={{ color: 'var(--color-text-secondary)' }}
+        >
+          {tr('agents.form.model')}
+        </label>
+        <input
+          type="text"
+          value={entry.model}
+          list="agent-model-suggestions"
+          placeholder={
+            entry.mode === 'default' && scan?.model
+              ? tr('agents.form.modelLocalPlaceholder', { model: scan.model })
+              : tr('agents.form.modelPlaceholder')
+          }
+          onChange={(e) => onChange({ ...entry, model: e.target.value.trim() })}
+          className={inputCls}
+          style={inputStyle}
+        />
+        <datalist id="agent-model-suggestions">
+          {(MODEL_SUGGESTIONS[adapter] ?? []).map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      </div>
+
+      {/* 模式切换：默认（本地配置）/ 自定义 */}
+      <div className="flex gap-2">
+        {(['default', 'custom'] as const).map((m) => {
+          const on = entry.mode === m
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onChange({ ...entry, mode: m })}
+              className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+              style={{
+                background: on ? 'var(--color-brand-bg)' : 'var(--color-bg-container)',
+                color: on ? 'var(--color-brand)' : 'var(--color-text-secondary)',
+                border: `1px solid ${on ? 'var(--color-brand)' : 'var(--color-border-light)'}`,
+                cursor: 'pointer'
+              }}
+            >
+              {m === 'default'
+                ? tr('agents.form.providerModeDefault')
+                : tr('agents.form.providerModeCustom')}
+            </button>
+          )
+        })}
+      </div>
+
+      {entry.mode === 'default' ? (
+        <div
+          className="text-xs rounded-lg p-2.5"
+          style={{ background: 'var(--color-bg-container)', border: '1px solid var(--color-border-light)' }}
+        >
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="font-medium" style={{ color: 'var(--color-text-secondary)' }}>
+              {tr('agents.form.localConfig')}
+            </span>
+            <button
+              type="button"
+              onClick={runScan}
+              disabled={scanning}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-md"
+              style={{
+                background: 'var(--color-bg-spotlight)',
+                border: '1px solid var(--color-border-light)',
+                color: 'var(--color-text-secondary)',
+                cursor: scanning ? 'default' : 'pointer'
+              }}
+            >
+              <RefreshCw size={11} className={scanning ? 'animate-spin' : ''} />
+              {tr('agents.form.rescan')}
+            </button>
+          </div>
+          {scanning ? (
+            <span style={{ color: 'var(--color-text-tertiary)' }}>{tr('agents.form.scanning')}</span>
+          ) : scan?.detected ? (
+            <div className="flex flex-col gap-1">
+              {scan.baseUrl ? (
+                <div className="flex gap-2">
+                  <span style={{ color: 'var(--color-text-tertiary)', minWidth: 64 }}>Base URL</span>
+                  <span className="font-mono truncate" style={{ color: 'var(--color-text-primary)' }}>
+                    {scan.baseUrl}
+                  </span>
+                </div>
+              ) : null}
+              {scan.model ? (
+                <div className="flex gap-2">
+                  <span style={{ color: 'var(--color-text-tertiary)', minWidth: 64 }}>
+                    {tr('agents.form.model')}
+                  </span>
+                  <span className="font-mono truncate" style={{ color: 'var(--color-text-primary)' }}>
+                    {scan.model}
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-center gap-1.5" style={{ color: 'var(--color-success)' }}>
+                <ShieldCheck size={12} />
+                {authSourceLabel(scan.authSource)}
+              </div>
+              {scan.configPath ? (
+                <span
+                  className="font-mono truncate"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                  title={scan.configPath}
+                >
+                  {scan.configPath}
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <span style={{ color: 'var(--color-text-tertiary)' }}>
+              {tr('agents.form.notDetected', { adapter: adapterLabel })}
+            </span>
+          )}
+        </div>
+      ) : (
+        <>
+          <div>
+            <label
+              className="block text-xs font-medium mb-1.5"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              Base URL
+            </label>
+            <input
+              type="text"
+              value={entry.baseUrl}
+              placeholder={
+                adapter === 'codex'
+                  ? tr('agents.form.baseUrlPlaceholderCodex')
+                  : tr('agents.form.baseUrlPlaceholderClaude')
+              }
+              onChange={(e) => onChange({ ...entry, baseUrl: e.target.value.trim() })}
+              className={inputCls}
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label
+              className="block text-xs font-medium mb-1.5"
+              style={{ color: 'var(--color-text-secondary)' }}
+            >
+              API Key
+            </label>
+            <input
+              type="password"
+              value={entry.authToken}
+              placeholder="sk-..."
+              onChange={(e) => onChange({ ...entry, authToken: e.target.value.trim() })}
+              className={inputCls}
+              style={inputStyle}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function AgentFormFields({
@@ -186,82 +434,16 @@ function AgentFormFields({
           </select>
         </div>
       </div>
-      <div>
-        <label
-          className="block text-xs font-medium mb-1.5"
-          style={{ color: 'var(--color-text-secondary)' }}
-        >
-          {tr('agents.form.model')}
-        </label>
-        <input
-          type="text"
-          value={value.model}
-          placeholder={tr('agents.form.modelPlaceholder')}
-          list="agent-model-suggestions"
-          onChange={(e) => onChange({ ...value, model: e.target.value.trim() })}
-          className={inputCls}
-          style={inputStyle}
-        />
-        <datalist id="agent-model-suggestions">
-          {(MODEL_SUGGESTIONS[value.adapterType] ?? []).map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-      </div>
-      <div
-        className="flex flex-col gap-3 p-3 rounded-lg"
-        style={{
-          background: 'var(--color-bg-spotlight)',
-          border: '1px dashed var(--color-border-light)'
-        }}
-      >
-        <div>
-          <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-            {tr('agents.form.provider')}
-          </span>
-          <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-tertiary)' }}>
-            {tr('agents.form.providerHint', {
-              adapter: value.adapterType === 'codex' ? 'Codex' : 'Claude Code'
-            })}
-          </p>
-        </div>
-        <div>
-          <label
-            className="block text-xs font-medium mb-1.5"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            Base URL
-          </label>
-          <input
-            type="text"
-            value={value.baseUrl}
-            placeholder={
-              value.adapterType === 'codex'
-                ? tr('agents.form.baseUrlPlaceholderCodex')
-                : tr('agents.form.baseUrlPlaceholderClaude')
-            }
-            onChange={(e) => onChange({ ...value, baseUrl: e.target.value.trim() })}
-            className={inputCls}
-            style={inputStyle}
-          />
-        </div>
-        <div>
-          <label
-            className="block text-xs font-medium mb-1.5"
-            style={{ color: 'var(--color-text-secondary)' }}
-          >
-            API Key
-          </label>
-          <input
-            type="password"
-            value={value.authToken}
-            placeholder="sk-..."
-            onChange={(e) => onChange({ ...value, authToken: e.target.value.trim() })}
-            className={inputCls}
-            style={inputStyle}
-          />
-        </div>
-      </div>
+      <ProviderSection
+        adapter={value.adapterType}
+        entry={value.providers[value.adapterType] ?? emptyProvider()}
+        onChange={(entry) =>
+          onChange({
+            ...value,
+            providers: { ...value.providers, [value.adapterType]: entry }
+          })
+        }
+      />
     </>
   )
 }
@@ -286,9 +468,7 @@ function ConfigModal({
     skills: agent.skills ?? '',
     group: agent.group ?? '',
     adapterType: agent.adapterType,
-    model: agent.model ?? '',
-    baseUrl: agent.providerConfig?.baseUrl ?? '',
-    authToken: agent.providerConfig?.authToken ?? ''
+    providers: normalizeProviders(agent.providerConfig, agent.adapterType, agent.model)
   })
   const [saving, setSaving] = useState(false)
 
@@ -303,8 +483,7 @@ function ConfigModal({
         skills: form.skills.trim(),
         group: form.group.trim(),
         adapterType: form.adapterType,
-        model: form.model,
-        providerConfig: { baseUrl: form.baseUrl, authToken: form.authToken }
+        providerConfig: form.providers
       })
       onSaved(updated)
       onClose()
@@ -370,9 +549,7 @@ function AddAgentModal({
     skills: '',
     group: '',
     adapterType: 'claude-code',
-    model: '',
-    baseUrl: '',
-    authToken: ''
+    providers: normalizeProviders(undefined)
   })
   const [saving, setSaving] = useState(false)
 
@@ -389,8 +566,7 @@ function AddAgentModal({
         skills: form.skills.trim(),
         group: form.group.trim(),
         adapterType: form.adapterType,
-        model: form.model,
-        providerConfig: { baseUrl: form.baseUrl, authToken: form.authToken }
+        providerConfig: form.providers
       })
       onCreated(agent)
       onClose()
@@ -659,7 +835,7 @@ export function AgentsPage(): React.JSX.Element {
                       >
                         {agent.adapterType}
                         {agent.model ? `\u3000${agent.model}` : ''}
-                        {agent.providerConfig?.baseUrl
+                        {agent.providerConfig?.[agent.adapterType]?.mode === 'custom'
                           ? `\u3000${tr('agents.page.independentProvider')}`
                           : ''}
                       </span>

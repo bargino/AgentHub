@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useAppStore } from './store'
+import { useAppStore, type PageType } from './store'
 import { wsClient } from './services/websocket'
 import { TitleBar } from './components/layout/TitleBar'
 import { IconNav } from './components/layout/IconNav'
@@ -7,6 +7,7 @@ import { ConversationList } from './components/conversation/ConversationList'
 import { GroupSettingsPanel } from './components/conversation/GroupSettingsPanel'
 import { ChatWindow } from './components/chat/ChatWindow'
 import { RightDock } from './components/layout/RightDock'
+import { RightRail } from './components/layout/RightRail'
 import { AgentsPage } from './components/agents/AgentsPage'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { ManagePage } from './components/manage/ManagePage'
@@ -19,6 +20,9 @@ import { useT } from './i18n'
 
 /** 断线宽限：仅当后端持续不可达超过此时长才提示，避免进入界面 / 瞬断时闪烁 */
 const DISCONNECT_GRACE_MS = 2500
+
+/** 全局页面（不挂会话列表外壳）；其余一律走会话工作区（会话列表 + 对话 + 右侧 dock）。 */
+const GLOBAL_PAGES: PageType[] = ['agents', 'manage', 'settings']
 
 function ConnectionBar(): React.JSX.Element | null {
   const t = useT()
@@ -64,7 +68,10 @@ function ConnectionBar(): React.JSX.Element | null {
 
 function App(): React.JSX.Element {
   const activePage = useAppStore((s) => s.activePage)
-  const anyRightOpen = useAppStore((s) => s.rightTab !== null || s.groupPanelOpen)
+  const rightOpen = useAppStore((s) => s.rightTab !== null)
+  const rightExpanded = useAppStore((s) => s.rightExpanded)
+  const groupPanelOpen = useAppStore((s) => s.groupPanelOpen)
+  const isGlobal = GLOBAL_PAGES.includes(activePage)
 
   // 恢复用户上次拖拽的列宽（会话列表 / 右侧面板）
   useEffect(() => {
@@ -96,7 +103,9 @@ function App(): React.JSX.Element {
       <div className="flex flex-1 overflow-hidden">
         <IconNav />
 
-        {activePage === 'chat' && (
+        {/* 会话工作区：左会话列表 + 中间对话 + 右侧工作区 dock（概览/任务/Diff/预览/部署）。
+            A2：dock 展开时接管中间区，隐藏对话以获得整宽工作面。 */}
+        {!isGlobal && (
           <>
             <ConversationList />
             <ResizeHandle
@@ -106,19 +115,28 @@ function App(): React.JSX.Element {
               storageKey="ah:convListWidth"
               defaultWidth={280}
             />
-            <ChatWindow />
-            {anyRightOpen && (
-              <ResizeHandle
-                cssVar="--right-panel-width"
-                min={300}
-                max={720}
-                invert
-                storageKey="ah:rightPanelWidth"
-                defaultWidth={380}
-              />
+
+            {!rightExpanded && <ChatWindow />}
+
+            {(rightOpen || groupPanelOpen) && (
+              <>
+                {!rightExpanded && (
+                  <ResizeHandle
+                    cssVar="--right-panel-width"
+                    min={300}
+                    max={720}
+                    invert
+                    storageKey="ah:rightPanelWidth"
+                    defaultWidth={380}
+                  />
+                )}
+                <GroupSettingsPanel />
+                <RightDock />
+              </>
             )}
-            <GroupSettingsPanel />
-            <RightDock />
+
+            {/* dock 收起时常驻右侧图标轨，作为 概览/任务/Diff/预览/部署/计划/Git 的常显入口 */}
+            {!rightOpen && <RightRail />}
           </>
         )}
 

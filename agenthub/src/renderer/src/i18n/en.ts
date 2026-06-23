@@ -27,9 +27,103 @@ export const en: Dict = {
   },
   nav: {
     chat: 'Sessions',
+    tasks: 'Tasks',
+    diff: 'Diff',
+    preview: 'Preview',
+    deploy: 'Deploy',
     agents: 'Agents',
     manage: 'Management',
     settings: 'Settings'
+  },
+  header: {
+    invite: 'Invite members',
+    notifications: 'Notifications',
+    more: 'More'
+  },
+  section: {
+    taskBoard: 'Task Board / DAG',
+    logs: 'Logs',
+    artifacts: 'Artifacts',
+    metrics: 'Metrics',
+    config: 'Config',
+    deployStart: 'Start deploy',
+    deployApprove: 'Approve deploy',
+    deployReject: 'Reject',
+    moreActions: 'More actions',
+    eventLog: 'Event log',
+    viewAll: 'View all',
+    deployPlan: 'Release plan',
+    viewTopology: 'View topology',
+    deployHistory: 'Deploy history',
+    deployLog: 'Deploy log',
+    envInfo: 'Environment',
+    deployConfig: 'Deploy config',
+    recentBuild: 'Recent build',
+    quickOps: 'Quick actions',
+    notifySub: 'Notifications',
+    notifyOnChange: 'Notify me on deploy status change',
+    devServer: 'Dev server',
+    previewEnv: 'Preview environment',
+    openExternal: 'Open in new window',
+    restart: 'Restart'
+  },
+  tab: {
+    overview: 'Overview',
+    chat: 'Chat',
+    tasks: 'Tasks',
+    diff: 'Diff',
+    preview: 'Preview',
+    deploy: 'Deploy'
+  },
+  deploy: {
+    noConversation: 'Select a conversation first',
+    empty: 'No deployment yet',
+    emptyHint: 'Create a deployment plan for this conversation; it runs after approval',
+    noSteps: 'This plan has no steps',
+    target: 'Target',
+    project: 'Project',
+    rollback: 'Rollback',
+    result: 'Result',
+    openResult: 'Open URL',
+    statusLabel: 'Status',
+    stepCount: 'Steps',
+    logPending: 'Logs start once approved and running',
+    logEmpty: 'No logs',
+    providerLabel: 'Target',
+    providerMock: 'Mock (demo)',
+    providerDocker: 'Local Docker',
+    providerRemote: 'Remote server',
+    providerHint: 'Remote needs host + command; Docker can set a port',
+    cfgPort: 'Port',
+    cfgHost: 'Host',
+    cfgUser: 'User',
+    cfgCommand: 'Deploy command',
+    status: {
+      planned: 'Pending approval',
+      deploying: 'Deploying',
+      success: 'Success',
+      failed: 'Failed',
+      rejected: 'Rejected'
+    }
+  },
+  overview: {
+    welcomeBack: 'Welcome back',
+    resume: 'Continue the multi-agent collaboration in this session',
+    stat: {
+      agents: 'Agents',
+      running: 'Running tasks',
+      pending: 'Pending approvals',
+      done: 'Completed'
+    },
+    recent: 'Recent activity',
+    recentEmpty: 'No activity yet',
+    info: 'Session info',
+    infoProject: 'Project',
+    infoBranch: 'Branch',
+    infoStatus: 'Status',
+    infoMembers: 'Members',
+    tasksUnit: ' tasks',
+    membersUnit: ' members'
   },
   palette: {
     title: 'Command Palette',
@@ -86,7 +180,9 @@ export const en: Dict = {
     refresh: 'Refresh',
     save: 'Save',
     saved: 'Saved',
-    saveFailed: 'Save failed'
+    saveFailed: 'Save failed',
+    preview: 'Preview',
+    edit: 'Edit'
   },
   review: {
     title: 'Review queue',
@@ -156,6 +252,8 @@ export const en: Dict = {
     retryFailed: 'Retry failed, please try again later',
     dependsOn: 'Depends on',
     detail: 'Details',
+    viewList: 'List',
+    viewGraph: 'DAG',
     status: {
       pending: 'Pending',
       running: 'Running',
@@ -248,7 +346,9 @@ export const en: Dict = {
     agentError: 'Agent execution error',
     loadAgentsFailed: 'Failed to load agent list',
     loadConvListFailed: 'Failed to load conversation list',
-    engineError: 'AgentHub engine error'
+    engineError: 'AgentHub engine error',
+    deployFailed: 'Deployment request failed',
+    deployDone: 'Deployment complete'
   },
   chat: {
     memberStackTitle: '{count} group members · click to manage',
@@ -258,6 +358,8 @@ export const en: Dict = {
     empty: {
       title: 'Multi-agent workspace',
       subtitle: 'Pick or start a session and let the AI team work for you',
+      startTitle: 'Start the collaboration',
+      startSubtitle: 'Send the first message, or @ an agent and use / for commands',
       newProjectTitle: 'New project session',
       newProjectDesc: 'Link a local project and assemble an agent group',
       mentionTitle: '@Agent direct',
@@ -331,6 +433,14 @@ export const en: Dict = {
       thoughtFor: 'Thought for {duration}',
       thought: 'Thought'
     },
+    turn: {
+      trace: 'Process',
+      running: 'Running'
+    },
+    changes: {
+      title: 'Code changes',
+      files: '{count} files'
+    },
     bubble: {
       quote: 'Quote reply',
       edit: 'Edit & resend',
@@ -352,6 +462,16 @@ export const en: Dict = {
     title: 'Sessions',
     newProject: 'New project',
     search: 'Search sessions',
+    filter: {
+      label: 'Filter sessions',
+      all: 'All sessions',
+      running: 'Running',
+      waitingApproval: 'Awaiting approval',
+      pinned: 'Pinned',
+      unread: 'Unread',
+      archived: 'Archived',
+      empty: 'No sessions match this filter'
+    },
     pin: 'Pin session',
     unpin: 'Unpin',
     archive: 'Archive session',
@@ -443,9 +563,24 @@ export const en: Dict = {
       adapter: 'Adapter type',
       model: 'Model',
       modelPlaceholder: 'Leave blank to use the SDK default model',
-      provider: 'API provider (optional)',
+      modelLocalPlaceholder: 'Local default: {model} (leave blank to keep)',
+      provider: 'API provider',
       providerHint:
-        'Leave blank to use the local {adapter} login; if set, only this agent uses this provider — others are unaffected',
+        'Default uses the local {adapter} login/config; custom makes only this agent use the provider you enter. codex and claude-code are stored independently',
+      providerModeDefault: 'Default (local config)',
+      providerModeCustom: 'Custom',
+      localConfig: 'Detected local config',
+      rescan: 'Rescan',
+      scanning: 'Scanning…',
+      notDetected: 'No local {adapter} config detected (will use the SDK default login)',
+      authSource: {
+        api_key: 'API key configured',
+        chatgpt_login: 'ChatGPT login',
+        cli_login: 'CLI login',
+        env: 'Env credentials',
+        settings: 'settings.json credentials',
+        none: 'No credentials detected'
+      },
       baseUrlPlaceholderCodex: 'e.g. https://api.deepseek.com/v1',
       baseUrlPlaceholderClaude: 'e.g. https://api.moonshot.cn/anthropic'
     },

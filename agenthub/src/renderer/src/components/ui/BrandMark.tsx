@@ -5,7 +5,7 @@ interface BrandMarkProps {
   className?: string
 }
 
-/** AgentHub 品牌符号：聊天气泡 + 中心 hub 节点 + 协作卫星节点。
+/** AgentHub 品牌符号：圆角六边形 Hub + 中心节点与三条短辐（编排/基础设施意象，去 AI 气泡）。
  *  矢量源同步自 assets/brand/agenthub-mark.svg（单色版用 currentColor 自适应主题）。 */
 export function BrandMark({
   size = 24,
@@ -24,21 +24,20 @@ export function BrandMark({
     >
       <title>AgentHub</title>
       <path
-        d="M9.5 5 H22.5 Q28 5 28 10.5 V17.5 Q28 23 22.5 23 H11 L6.5 27.5 L8.5 23 Q4 23 4 17.5 V10.5 Q4 5 9.5 5 Z"
+        d="M16 3.5 L26.5 9.5 V22.5 L16 28.5 L5.5 22.5 V9.5 Z"
         stroke={color}
-        strokeWidth={2}
+        strokeWidth={2.2}
         strokeLinejoin="round"
       />
       <path
-        d="M10.5 11 16 15.5M21.5 11 16 15.5"
+        d="M16 15.5 V9.6M16 15.5 21.4 18.9M16 15.5 10.6 18.9"
         stroke={color}
-        strokeWidth={1.4}
+        strokeWidth={1.6}
         strokeLinecap="round"
-        opacity={0.5}
+        strokeLinejoin="round"
+        opacity={0.55}
       />
-      <circle cx="10.5" cy="11" r="2.2" fill={color} />
-      <circle cx="21.5" cy="11" r="2.2" fill={color} />
-      <circle cx="16" cy="15.5" r="3" fill={color} />
+      <circle cx="16" cy="15.7" r="2.7" fill={color} />
     </svg>
   )
 }

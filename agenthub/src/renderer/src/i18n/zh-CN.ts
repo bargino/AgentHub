@@ -27,9 +27,103 @@ export const zhCN: Dict = {
   },
   nav: {
     chat: '会话',
+    tasks: '任务',
+    diff: 'Diff',
+    preview: '预览',
+    deploy: '部署',
     agents: 'Agent',
     manage: '管理中心',
     settings: '设置'
+  },
+  header: {
+    invite: '邀请成员',
+    notifications: '通知',
+    more: '更多'
+  },
+  section: {
+    taskBoard: '任务状态面板 / Task DAG',
+    logs: '日志',
+    artifacts: '产物',
+    metrics: '指标',
+    config: '配置',
+    deployStart: '发起部署',
+    deployApprove: '批准部署',
+    deployReject: '拒绝',
+    moreActions: '更多操作',
+    eventLog: '事件日志',
+    viewAll: '查看全部',
+    deployPlan: '发布计划',
+    viewTopology: '查看发布拓扑',
+    deployHistory: '部署历史',
+    deployLog: '部署日志',
+    envInfo: '环境信息',
+    deployConfig: '部署配置',
+    recentBuild: '最近构建',
+    quickOps: '快捷操作',
+    notifySub: '通知订阅',
+    notifyOnChange: '部署状态变更时通知我',
+    devServer: '开发服务器',
+    previewEnv: '预览环境',
+    openExternal: '在新窗口打开',
+    restart: '重启服务'
+  },
+  tab: {
+    overview: '概览',
+    chat: '对话',
+    tasks: '任务',
+    diff: 'Diff',
+    preview: '预览',
+    deploy: '部署'
+  },
+  deploy: {
+    noConversation: '请先选择一个会话',
+    empty: '尚未发起部署',
+    emptyHint: '为当前会话创建部署计划，审批通过后执行模拟部署',
+    noSteps: '该部署计划暂无步骤',
+    target: '目标环境',
+    project: '应用',
+    rollback: '回滚策略',
+    result: '部署结果',
+    openResult: '打开访问地址',
+    statusLabel: '状态',
+    stepCount: '步骤数',
+    logPending: '审批通过后开始执行并记录日志',
+    logEmpty: '暂无日志',
+    providerLabel: '部署目标',
+    providerMock: '模拟（演示）',
+    providerDocker: '本地 Docker',
+    providerRemote: '远程服务器',
+    providerHint: '远程需填主机与部署命令；本地 Docker 可设端口',
+    cfgPort: '端口',
+    cfgHost: '主机地址',
+    cfgUser: '用户',
+    cfgCommand: '部署命令',
+    status: {
+      planned: '待审批',
+      deploying: '部署中',
+      success: '成功',
+      failed: '失败',
+      rejected: '已拒绝'
+    }
+  },
+  overview: {
+    welcomeBack: '欢迎回来',
+    resume: '继续推进该会话的多 Agent 协作',
+    stat: {
+      agents: '参与 Agent',
+      running: '进行中任务',
+      pending: '待审批',
+      done: '已完成'
+    },
+    recent: '最近活动',
+    recentEmpty: '暂无活动记录',
+    info: '会话信息',
+    infoProject: '项目',
+    infoBranch: '分支',
+    infoStatus: '状态',
+    infoMembers: '成员',
+    tasksUnit: '个任务',
+    membersUnit: '名成员'
   },
   palette: {
     title: '命令面板',
@@ -85,7 +179,9 @@ export const zhCN: Dict = {
     refresh: '刷新',
     save: '保存',
     saved: '已保存',
-    saveFailed: '保存失败'
+    saveFailed: '保存失败',
+    preview: '预览',
+    edit: '编辑'
   },
   review: {
     title: '审查队列',
@@ -155,6 +251,8 @@ export const zhCN: Dict = {
     retryFailed: '重试失败，请稍后再试',
     dependsOn: '依赖',
     detail: '详情',
+    viewList: '列表',
+    viewGraph: 'DAG 图',
     status: {
       pending: '等待',
       running: '运行中',
@@ -245,7 +343,9 @@ export const zhCN: Dict = {
     agentError: 'Agent 执行出错',
     loadAgentsFailed: '加载 Agent 列表失败',
     loadConvListFailed: '加载会话列表失败',
-    engineError: 'AgentHub 引擎异常'
+    engineError: 'AgentHub 引擎异常',
+    deployFailed: '部署请求失败',
+    deployDone: '部署完成'
   },
   chat: {
     memberStackTitle: '群成员 {count} 人，点击管理',
@@ -255,6 +355,8 @@ export const zhCN: Dict = {
     empty: {
       title: '多 Agent 协作工作台',
       subtitle: '选择或新建一个会话，让 AI 团队为你工作',
+      startTitle: '开始这场协作',
+      startSubtitle: '发送第一条消息，或 @ 指定 Agent、用 / 触发命令',
       newProjectTitle: '新建项目会话',
       newProjectDesc: '关联本地项目，组建 Agent 群',
       mentionTitle: '@Agent 直达',
@@ -328,6 +430,14 @@ export const zhCN: Dict = {
       thoughtFor: '已思考 {duration}',
       thought: '已思考'
     },
+    turn: {
+      trace: '执行过程',
+      running: '执行中'
+    },
+    changes: {
+      title: '代码修改',
+      files: '{count} 个文件'
+    },
     bubble: {
       quote: '引用回复',
       edit: '编辑重发',
@@ -349,6 +459,16 @@ export const zhCN: Dict = {
     title: '会话',
     newProject: '新建项目',
     search: '搜索会话',
+    filter: {
+      label: '筛选会话',
+      all: '全部会话',
+      running: '进行中',
+      waitingApproval: '待审批',
+      pinned: '已置顶',
+      unread: '未读',
+      archived: '已归档',
+      empty: '没有符合条件的会话'
+    },
     pin: '置顶会话',
     unpin: '取消置顶',
     archive: '归档会话',
@@ -439,8 +559,24 @@ export const zhCN: Dict = {
       adapter: '适配器类型',
       model: '模型',
       modelPlaceholder: '留空使用 SDK 默认模型',
-      provider: 'API 供应商（可选）',
-      providerHint: '留空走本地 {adapter} 登录态；填写后仅该 Agent 使用此供应商，互不影响',
+      modelLocalPlaceholder: '本地默认：{model}（留空沿用）',
+      provider: 'API 供应商',
+      providerHint:
+        '默认走本地 {adapter} 登录态/配置；自定义则仅该 Agent 使用填写的供应商。codex 与 claude-code 各自独立保存',
+      providerModeDefault: '默认（本地配置）',
+      providerModeCustom: '自定义',
+      localConfig: '检测到的本地配置',
+      rescan: '重新扫描',
+      scanning: '扫描中…',
+      notDetected: '未检测到本地 {adapter} 配置（将走 SDK 默认登录态）',
+      authSource: {
+        api_key: '已配置 API Key',
+        chatgpt_login: 'ChatGPT 登录态',
+        cli_login: 'CLI 登录态',
+        env: '环境变量凭据',
+        settings: 'settings.json 凭据',
+        none: '未检测到凭据'
+      },
       baseUrlPlaceholderCodex: '如 https://api.deepseek.com/v1',
       baseUrlPlaceholderClaude: '如 https://api.moonshot.cn/anthropic'
     },

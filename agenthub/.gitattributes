@@ -1,0 +1,15 @@
+# 统一文本文件行尾为 LF（与 .editorconfig / prettier endOfLine 默认对齐），
+# 二进制资源显式标记 binary，避免被行尾归一化破坏。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

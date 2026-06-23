@@ -102,6 +102,10 @@ _SQLITE_COLUMN_MIGRATIONS: dict[str, list[tuple[str, str]]] = {
         #   ALTER TABLE tasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';
         ("acceptance", "TEXT NOT NULL DEFAULT ''"),
     ],
+    "deployments": [
+        # Epic D：部署目标 provider（docker/remote）；expand-only，旧记录默认 docker
+        ("provider", "VARCHAR(32) NOT NULL DEFAULT 'docker'"),
+    ],
 }
 
 
@@ -120,6 +124,10 @@ async def init_database() -> None:
         for table, columns in _SQLITE_COLUMN_MIGRATIONS.items():
             rows = await conn.execute(text(f"PRAGMA table_info({table})"))
             existing = {row[1] for row in rows}
+            # 表不存在（对应模型未导入注册）→ 跳过，避免 ALTER 不存在的表报错；
+            # 模型导入后 create_all 会用完整列建表，无需补列
+            if not existing:
+                continue
             for name, ddl in columns:
                 if name not in existing:
                     await conn.execute(

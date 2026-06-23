@@ -1,5 +1,5 @@
 import type { AgentRole } from '../../types'
-import { Cpu, Map, Code2, SearchCheck, Eye, Rocket, Bot, type LucideIcon } from 'lucide-react'
+import { Cpu, Map, Code2, SearchCheck, Eye, Rocket, Bot, User, type LucideIcon } from 'lucide-react'
 
 export interface RoleVisual {
   icon: LucideIcon
@@ -57,4 +57,28 @@ export function getRoleGradient(role: AgentRole): string {
 
 export function getRoleLabel(role: AgentRole): string {
   return ROLE_CONFIG[role]?.label ?? role
+}
+
+/** 角色专属图标：用于头像图标化（取代首字母）。user/未知回退到 User/Bot。 */
+export function getRoleIcon(role: string): LucideIcon {
+  if (role === 'user') return User
+  return ROLE_CONFIG[role as AgentRole]?.icon ?? customRoleConfig(role).icon
+}
+
+/** 头像「双色调」前景色：角色主色；user 用中性 slate，随主题自适应。 */
+export function getRoleSolid(role: string): string {
+  if (role === 'user') return 'var(--color-avatar-user)'
+  return getRoleColor(role)
+}
+
+/** 头像底色：仅极淡角色色混入卡片底（≈8%），近中性，去「饱和色块」感（方向二·暖中性）。 */
+export function getRoleTint(role: string): string {
+  const c = getRoleSolid(role)
+  return `color-mix(in srgb, ${c} 8%, var(--color-bg-container))`
+}
+
+/** 头像描边：角色主色低透明细环，作为唯一的角色识别点（喧宾不夺主）。 */
+export function getRoleRing(role: string): string {
+  const c = getRoleSolid(role)
+  return `color-mix(in srgb, ${c} 26%, transparent)`
 }

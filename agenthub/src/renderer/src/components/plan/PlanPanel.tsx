@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FileText, RefreshCw, Save, Loader2, ChevronLeft, Check } from 'lucide-react'
+import { FileText, RefreshCw, Save, Loader2, ChevronLeft, Check, Eye, Pencil } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useT } from '../../i18n'
 import { listPlans, getPlanFile, savePlanFile, type PlanFile } from '../../services/api'
+import { MarkdownBody } from '../chat/MessageBubble'
 
 /** 计划查看/编辑面板（item 2）：列出 spec-driven 三件套 + 合并版，支持逐文件查看与编辑落盘。 */
 export function PlanPanel(): React.JSX.Element {
@@ -16,6 +17,7 @@ export function PlanPanel(): React.JSX.Element {
   const [dirty, setDirty] = useState(false)
   const [fileLoading, setFileLoading] = useState(false)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [mode, setMode] = useState<'preview' | 'edit'>('preview')
 
   const loadList = useCallback(async (): Promise<void> => {
     if (!activeId) return
@@ -31,6 +33,8 @@ export function PlanPanel(): React.JSX.Element {
 
   // 会话切换 / 面板打开 → 重新拉列表，并退回列表视图
   useEffect(() => {
+    // 切会话时清空详情、退回列表：依赖变更时的合法 reset（非 effect 派生 state）
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelected(null)
     void loadList()
   }, [loadList])
@@ -40,6 +44,7 @@ export function PlanPanel(): React.JSX.Element {
     setFileLoading(true)
     setSaveState('idle')
     setDirty(false)
+    setMode('preview')
     try {
       const r = await getPlanFile(activeId as string, f.path)
       setContent(r.content)
@@ -78,7 +83,10 @@ export function PlanPanel(): React.JSX.Element {
   // 详情视图：查看 / 编辑单个计划文件
   if (selected) {
     return (
-      <div className="flex flex-col h-full min-h-0" style={{ background: 'var(--color-bg-container)' }}>
+      <div
+        className="flex flex-col h-full min-h-0"
+        style={{ background: 'var(--color-bg-container)' }}
+      >
         <div
           className="flex items-center gap-2 shrink-0"
           style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-border-light)' }}
@@ -98,6 +106,15 @@ export function PlanPanel(): React.JSX.Element {
           >
             {selected.path}
           </span>
+          <button
+            onClick={() => setMode((m) => (m === 'preview' ? 'edit' : 'preview'))}
+            className="btn-ghost flex items-center gap-1 px-2 h-7 rounded-md text-xs shrink-0"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title={mode === 'preview' ? tr('plan.edit') : tr('plan.preview')}
+          >
+            {mode === 'preview' ? <Pencil size={13} /> : <Eye size={13} />}
+            <span>{mode === 'preview' ? tr('plan.edit') : tr('plan.preview')}</span>
+          </button>
           <button
             onClick={handleSave}
             disabled={saveState === 'saving' || !dirty}
@@ -127,10 +144,13 @@ export function PlanPanel(): React.JSX.Element {
         </div>
 
         {fileLoading ? (
-          <div className="flex items-center justify-center flex-1" style={{ color: 'var(--color-text-tertiary)' }}>
+          <div
+            className="flex items-center justify-center flex-1"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
             <Loader2 size={18} className="animate-spin" />
           </div>
-        ) : (
+        ) : mode === 'edit' ? (
           <textarea
             value={content}
             onChange={(e) => {
@@ -149,6 +169,13 @@ export function PlanPanel(): React.JSX.Element {
               border: 'none'
             }}
           />
+        ) : (
+          <div
+            className="flex-1 min-h-0 overflow-auto"
+            style={{ padding: '12px 16px', background: 'var(--color-bg-container)' }}
+          >
+            <MarkdownBody content={content} />
+          </div>
         )}
       </div>
     )
@@ -156,7 +183,10 @@ export function PlanPanel(): React.JSX.Element {
 
   // 列表视图：会话下全部计划文件
   return (
-    <div className="flex flex-col h-full min-h-0" style={{ background: 'var(--color-bg-container)' }}>
+    <div
+      className="flex flex-col h-full min-h-0"
+      style={{ background: 'var(--color-bg-container)' }}
+    >
       <div
         className="flex items-center gap-2 shrink-0"
         style={{ padding: '10px 16px', borderBottom: '1px solid var(--color-border-light)' }}
@@ -211,7 +241,10 @@ export function PlanPanel(): React.JSX.Element {
                   {f.path}
                 </div>
               </div>
-              <span className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--color-text-tertiary)' }}>
+              <span
+                className="text-[11px] tabular-nums shrink-0"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
                 {f.mtime?.slice(11, 16)}
               </span>
             </button>

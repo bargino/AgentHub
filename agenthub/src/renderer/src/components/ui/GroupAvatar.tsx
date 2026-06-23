@@ -1,12 +1,6 @@
 import * as React from 'react'
 import { cn } from '@renderer/lib/utils'
-import { getRoleGradient } from './role'
-import { t } from '../../i18n'
-
-function monogram(role: string): string {
-  if (role === 'user') return t('common.meInitial')
-  return role.charAt(0).toUpperCase() || '?'
-}
+import { getRoleIcon, getRoleSolid, getRoleTint, getRoleRing } from './role'
 
 export interface GroupAvatarProps {
   /** 成员角色列表（按 resolveMembers 顺序）。单人=单头像，多人=2×2 拼贴 */
@@ -16,29 +10,55 @@ export interface GroupAvatarProps {
   className?: string
 }
 
-/** 群组头像：单成员渲染渐变方头像，多成员渲染微信式 2×2 拼贴（对齐原型 .avatar-stack）。 */
+/** 单角色双色调图标块（群组头像的单元）。 */
+function RoleTile({
+  role,
+  size,
+  radius,
+  iconRatio
+}: {
+  role: string
+  size: number
+  radius: number
+  iconRatio: number
+}): React.JSX.Element {
+  return (
+    <div
+      className="flex items-center justify-center"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius,
+        background: getRoleTint(role),
+        boxShadow: `inset 0 0 0 1px ${getRoleRing(role)}`
+      }}
+    >
+      {React.createElement(getRoleIcon(role), {
+        size: Math.max(9, Math.round(size * iconRatio)),
+        color: getRoleSolid(role),
+        strokeWidth: 2,
+        absoluteStrokeWidth: true
+      })}
+    </div>
+  )
+}
+
+/** 群组头像：单成员渲染双色调图标块，多成员渲染 2×2 拼贴（图标化，去「纯色+字」）。 */
 export function GroupAvatar({ roles, size = 40, className }: GroupAvatarProps): React.JSX.Element {
   const list = roles.length > 0 ? roles : ['orchestrator']
 
   if (list.length === 1) {
     return (
-      <div
-        className={cn('flex items-center justify-center font-bold text-white', className)}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: 12,
-          background: getRoleGradient(list[0]),
-          fontSize: Math.round(size * 0.4),
-          boxShadow: '0 4px 10px rgba(15, 23, 42, 0.12)'
-        }}
-      >
-        {monogram(list[0])}
+      <div className={className}>
+        <RoleTile role={list[0]} size={size} radius={12} iconRatio={0.46} />
       </div>
     )
   }
 
   const cells = list.slice(0, 4)
+  const gap = 2
+  const pad = 2
+  const cell = (size - pad * 2 - gap) / 2
   return (
     <div
       className={cn('grid', className)}
@@ -46,26 +66,15 @@ export function GroupAvatar({ roles, size = 40, className }: GroupAvatarProps): 
         width: size,
         height: size,
         gridTemplateColumns: '1fr 1fr',
-        gap: 2,
-        padding: 2,
+        gap,
+        padding: pad,
         borderRadius: 12,
-        overflow: 'hidden',
-        background: 'var(--color-border-light)',
-        boxShadow: '0 4px 10px rgba(15, 23, 42, 0.10)'
+        background: 'var(--color-bg-container)',
+        boxShadow: 'inset 0 0 0 1px var(--color-border)'
       }}
     >
       {cells.map((role, i) => (
-        <div
-          key={`${role}-${i}`}
-          className="flex items-center justify-center font-bold text-white"
-          style={{
-            borderRadius: 5,
-            background: getRoleGradient(role),
-            fontSize: Math.max(8, Math.round(size * 0.22))
-          }}
-        >
-          {monogram(role)}
-        </div>
+        <RoleTile key={`${role}-${i}`} role={role} size={cell} radius={5} iconRatio={0.5} />
       ))}
     </div>
   )

@@ -17,9 +17,7 @@ function SheetClose(props: React.ComponentProps<typeof SheetPrimitive.Close>): R
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
 }
 
-function SheetPortal(
-  props: React.ComponentProps<typeof SheetPrimitive.Portal>
-): React.JSX.Element {
+function SheetPortal(props: React.ComponentProps<typeof SheetPrimitive.Portal>): React.JSX.Element {
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
@@ -77,11 +75,23 @@ function SheetContent({
 }
 
 function SheetHeader({ className, ...props }: React.ComponentProps<'div'>): React.JSX.Element {
-  return <div data-slot="sheet-header" className={cn('flex flex-col gap-1.5 p-4', className)} {...props} />
+  return (
+    <div
+      data-slot="sheet-header"
+      className={cn('flex flex-col gap-1.5 p-4', className)}
+      {...props}
+    />
+  )
 }
 
 function SheetFooter({ className, ...props }: React.ComponentProps<'div'>): React.JSX.Element {
-  return <div data-slot="sheet-footer" className={cn('mt-auto flex flex-col gap-2 p-4', className)} {...props} />
+  return (
+    <div
+      data-slot="sheet-footer"
+      className={cn('mt-auto flex flex-col gap-2 p-4', className)}
+      {...props}
+    />
+  )
 }
 
 function SheetTitle({

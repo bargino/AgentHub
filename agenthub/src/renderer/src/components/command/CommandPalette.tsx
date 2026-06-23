@@ -9,7 +9,9 @@ import {
   ListTodo,
   Files,
   Monitor,
-  Users
+  Users,
+  LayoutDashboard,
+  Send
 } from 'lucide-react'
 import {
   CommandDialog,
@@ -108,6 +110,10 @@ export function CommandPalette(): React.JSX.Element {
         </CommandGroup>
 
         <CommandGroup heading={tr('palette.group.panels')}>
+          <CommandItem value="overview panel 概览" onSelect={() => openPanel('overview')}>
+            <LayoutDashboard />
+            <span>{tr('tab.overview')}</span>
+          </CommandItem>
           <CommandItem value="review diff approval 审查" onSelect={() => openPanel('review')}>
             <Eye />
             <span>{tr('palette.panel.review')}</span>
@@ -116,13 +122,17 @@ export function CommandPalette(): React.JSX.Element {
             <ListTodo />
             <span>{tr('palette.panel.task')}</span>
           </CommandItem>
-          <CommandItem value="git files panel 文件" onSelect={() => openPanel('git')}>
-            <Files />
-            <span>{tr('palette.panel.git')}</span>
-          </CommandItem>
           <CommandItem value="preview panel 预览" onSelect={() => openPanel('preview')}>
             <Monitor />
             <span>{tr('palette.panel.preview')}</span>
+          </CommandItem>
+          <CommandItem value="deploy panel 部署" onSelect={() => openPanel('deploy')}>
+            <Send />
+            <span>{tr('nav.deploy')}</span>
+          </CommandItem>
+          <CommandItem value="git files panel 文件" onSelect={() => openPanel('git')}>
+            <Files />
+            <span>{tr('palette.panel.git')}</span>
           </CommandItem>
           <CommandItem value="group settings panel 群设置" onSelect={openGroup}>
             <Users />

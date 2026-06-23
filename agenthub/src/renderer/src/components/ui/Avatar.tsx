@@ -1,8 +1,7 @@
 import * as React from 'react'
 import * as AvatarPrimitive from '@radix-ui/react-avatar'
 import { cn } from '@renderer/lib/utils'
-import { getRoleGradient } from './role'
-import { t } from '../../i18n'
+import { getRoleIcon, getRoleSolid, getRoleTint, getRoleRing } from './role'
 
 export type AvatarRole =
   | 'orchestrator'
@@ -23,22 +22,18 @@ const SIZE_PX: Record<AvatarSize, number> = {
   lg: 44
 }
 
-const FONT_PX: Record<AvatarSize, number> = {
-  xs: 10,
-  sm: 12,
-  md: 15,
-  lg: 18
+const ICON_PX: Record<AvatarSize, number> = {
+  xs: 12,
+  sm: 15,
+  md: 19,
+  lg: 23
 }
 
-const USER_GRADIENT = 'linear-gradient(135deg, #334155 0%, #64748b 100%)'
-
-function avatarGradient(role: string): string {
-  return role === 'user' ? USER_GRADIENT : getRoleGradient(role)
-}
-
-function monogram(role: string): string {
-  if (role === 'user') return t('common.meInitial')
-  return role.charAt(0).toUpperCase() || '?'
+const RADIUS_PX: Record<AvatarSize, number> = {
+  xs: 7,
+  sm: 9,
+  md: 11,
+  lg: 13
 }
 
 export interface AvatarProps {
@@ -47,31 +42,41 @@ export interface AvatarProps {
   className?: string
 }
 
-/** 角色头像：保留 role/size API，底层 Radix Avatar；角色双色渐变 + 白色字标 + 柔和投影（对齐原型）。 */
+/**
+ * 角色头像：以「形状」区分人/Agent —— 真人（user）为中性圆形，Agent 为圆角方形徽标；
+ * 近中性底 + 角色色图标 + 角色色细环，去「饱和色块」感，随主题自适应。
+ */
 export function Avatar({ role, size = 'md', className }: AvatarProps): React.JSX.Element {
   const px = SIZE_PX[size]
+  const solid = getRoleSolid(role)
+  const isHuman = role === 'user'
   return (
     <AvatarPrimitive.Root
       data-slot="avatar"
       data-role={role}
       className={cn(
-        'relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[10px] select-none',
+        'relative inline-flex shrink-0 items-center justify-center overflow-hidden select-none',
         className
       )}
       style={{
         width: px,
         height: px,
-        background: avatarGradient(role),
-        boxShadow: '0 4px 10px rgba(15, 23, 42, 0.12)'
+        borderRadius: isHuman ? '9999px' : RADIUS_PX[size],
+        background: getRoleTint(role),
+        boxShadow: `inset 0 0 0 1px ${getRoleRing(role)}`
       }}
     >
       <AvatarPrimitive.Fallback
         data-slot="avatar-fallback"
         delayMs={0}
-        className="flex size-full items-center justify-center font-bold text-white"
-        style={{ fontSize: FONT_PX[size] }}
+        className="flex size-full items-center justify-center"
       >
-        {monogram(role)}
+        {React.createElement(getRoleIcon(role), {
+          size: ICON_PX[size],
+          color: solid,
+          strokeWidth: 2,
+          absoluteStrokeWidth: true
+        })}
       </AvatarPrimitive.Fallback>
     </AvatarPrimitive.Root>
   )

@@ -7,15 +7,11 @@ function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>): React
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }
 
-function SelectGroup(
-  props: React.ComponentProps<typeof SelectPrimitive.Group>
-): React.JSX.Element {
+function SelectGroup(props: React.ComponentProps<typeof SelectPrimitive.Group>): React.JSX.Element {
   return <SelectPrimitive.Group data-slot="select-group" {...props} />
 }
 
-function SelectValue(
-  props: React.ComponentProps<typeof SelectPrimitive.Value>
-): React.JSX.Element {
+function SelectValue(props: React.ComponentProps<typeof SelectPrimitive.Value>): React.JSX.Element {
   return <SelectPrimitive.Value data-slot="select-value" {...props} />
 }
 

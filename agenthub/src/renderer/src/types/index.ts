@@ -8,8 +8,8 @@ export type TaskStatus =
   | 'cancelled'
 export type AgentRole = string
 export type RiskLevel = 'low' | 'medium' | 'high'
-/** 右侧停靠区单实例 tab：审查（diff+审批合一）/ 任务 / Git / 预览 */
-export type RightTab = 'review' | 'task' | 'git' | 'preview' | 'plan'
+/** 右侧工作区单实例 tab：概览 / 任务 / 审查(diff) / 预览 / 部署 / 计划 / Git */
+export type RightTab = 'overview' | 'task' | 'review' | 'preview' | 'deploy' | 'plan' | 'git'
 
 export interface Conversation {
   id: string
@@ -93,6 +93,35 @@ export interface DiffRecord {
   status: 'pending' | 'approved' | 'rejected'
 }
 
+export type DeployStatus = 'planned' | 'deploying' | 'success' | 'failed' | 'rejected'
+
+export interface DeployStep {
+  name: string
+  command: string
+}
+
+/** 部署计划（后端 deploy provider build_plan 的形状） */
+export interface DeployPlan {
+  target: string
+  steps: DeployStep[]
+  rollback: string
+  project: string
+  /** 真实 provider 配置不足回退 mock 时的说明（后端写入） */
+  fallbackNote?: string
+}
+
+/** 部署记录（后端 DeploymentRecord）：创建计划 → 审批 → 执行（mock/docker/remote） */
+export interface Deployment {
+  id: string
+  conversationId: string
+  status: DeployStatus
+  /** 部署目标 provider：mock（默认）/ docker / remote */
+  provider?: string
+  plan: DeployPlan
+  logs: string
+  resultUrl: string | null
+}
+
 export interface Approval {
   id: string
   conversationId: string
@@ -108,9 +137,28 @@ export interface Approval {
   diffId?: string | null
 }
 
+export type ProviderMode = 'default' | 'custom'
+
+/** 单个适配器的供应商配置。mode=default 走本地 CLI 登录态；custom 注入 baseUrl/authToken。
+ *  model 与该适配器供应商绑定（按适配器各自保存，避免切换后用到不存在的模型）。 */
 export interface ProviderConfig {
+  mode: ProviderMode
   baseUrl: string
   authToken: string
+  model: string
+}
+
+/** 按适配器类型分组的供应商配置（codex / claude-code 各自独立）。 */
+export type ProviderConfigMap = Record<string, ProviderConfig>
+
+/** 本地 codex/claude-code 配置扫描结果（默认模式回显检测到的供应商）。 */
+export interface ProviderScan {
+  adapter: string
+  detected: boolean
+  baseUrl: string
+  model: string
+  authSource: string
+  configPath: string
 }
 
 export interface Agent {
@@ -122,7 +170,7 @@ export interface Agent {
   group: string
   adapterType: string
   model: string
-  providerConfig: ProviderConfig
+  providerConfig: ProviderConfigMap
   capabilities: Record<string, unknown>
   enabled: boolean
 }

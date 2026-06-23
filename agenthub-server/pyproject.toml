@@ -48,6 +48,12 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 
+[tool.pytest.ini_options]
+# asyncio_mode=auto：异步用例无需逐个 @pytest.mark.asyncio，沿用现有纯函数式写法
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

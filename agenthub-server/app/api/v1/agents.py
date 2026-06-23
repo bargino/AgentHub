@@ -9,7 +9,8 @@ from app.api.deps import get_db
 from app.core.registry import get_global_registry
 from app.db.models import AgentRecord
 from app.orchestrator.agent_loader import load_agent_defs
-from app.schemas import AgentCreate, AgentOut, AgentUpdate
+from app.schemas import AgentCreate, AgentOut, AgentUpdate, ProviderScanOut
+from app.services.provider import normalize_provider_config, scan_provider
 
 router = APIRouter()
 
@@ -45,15 +46,27 @@ class AgentOutWithAdapter(AgentOut):
     active_adapter: str | None = None
 
 
+def _effective_model(provider_config: dict, adapter_type: str, fallback: str) -> str:
+    """当前适配器槽内的模型名（与供应商绑定）；缺省回退旧顶层 model。"""
+    entry = provider_config.get(adapter_type) if adapter_type else None
+    if isinstance(entry, dict) and entry.get("model"):
+        return str(entry["model"])
+    return fallback or ""
+
+
 def _to_out(r: AgentRecord) -> AgentOut:
+    pc = normalize_provider_config(
+        r.provider_config, legacy_adapter=r.adapter_type, legacy_model=r.model
+    )
     return AgentOut(
         id=r.id, name=r.name, role=r.role,
         description=r.description or "", skills=r.skills or "",
         skill_specs=r.skill_specs or [],
         system_prompt=r.system_prompt or "", group=r.group or "",
-        adapter_type=r.adapter_type, model=r.model or "",
+        adapter_type=r.adapter_type,
+        model=_effective_model(pc, r.adapter_type, r.model or ""),
         context_window=r.context_window,
-        provider_config=r.provider_config or {},
+        provider_config=pc,
         capabilities=r.capabilities or {}, enabled=r.enabled,
     )
 
@@ -86,6 +99,10 @@ async def list_agents(db: AsyncSession = Depends(get_db)) -> list[AgentOutWithAd
 
     result: list[AgentOutWithAdapter] = []
     for r in records:
+        eff_adapter = r.adapter_type or active_adapter or ""
+        pc = normalize_provider_config(
+            r.provider_config, legacy_adapter=eff_adapter, legacy_model=r.model
+        )
         result.append(AgentOutWithAdapter(
             id=r.id,
             name=r.name,
@@ -95,10 +112,10 @@ async def list_agents(db: AsyncSession = Depends(get_db)) -> list[AgentOutWithAd
             skill_specs=r.skill_specs or [],
             system_prompt=r.system_prompt or "",
             group=r.group or "",
-            adapter_type=r.adapter_type or active_adapter or "",
-            model=r.model or "",
+            adapter_type=eff_adapter,
+            model=_effective_model(pc, eff_adapter, r.model or ""),
             context_window=r.context_window,
-            provider_config=r.provider_config or {},
+            provider_config=pc,
             capabilities=r.capabilities or {},
             enabled=r.enabled and active_adapter is not None,
             available_adapters=adapter_statuses,
@@ -109,6 +126,11 @@ async def list_agents(db: AsyncSession = Depends(get_db)) -> list[AgentOutWithAd
 
 @router.post("/agents", response_model=AgentOut)
 async def create_agent(data: AgentCreate, db: AsyncSession = Depends(get_db)) -> AgentOut:
+    pc = normalize_provider_config(
+        {k: v.model_dump() for k, v in data.provider_config.items()},
+        legacy_adapter=data.adapter_type,
+        legacy_model=data.model,
+    )
     record = AgentRecord(
         name=data.name,
         role=data.role,
@@ -118,9 +140,10 @@ async def create_agent(data: AgentCreate, db: AsyncSession = Depends(get_db)) ->
         system_prompt=data.system_prompt,
         group=data.group,
         adapter_type=data.adapter_type,
-        model=data.model,
+        # 顶层 model 镜像当前适配器槽的模型名（权威源在 provider_config 内，按适配器绑定）
+        model=_effective_model(pc, data.adapter_type, data.model),
         context_window=data.context_window,
-        provider_config=data.provider_config.model_dump(),
+        provider_config=pc,
         capabilities=data.capabilities,
         enabled=data.enabled,
     )
@@ -143,7 +166,23 @@ async def update_agent(
             raise HTTPException(status_code=400, detail="Orchestrator 不可停用")
         if "role" in updates and updates["role"] != "orchestrator":
             raise HTTPException(status_code=400, detail="Orchestrator 角色不可修改")
+    # provider_config 落库前归一化为「按适配器分组」（兼容旧扁平结构、补全两个适配器槽）；
+    # 顶层 model 镜像当前适配器槽的模型名（权威源在 provider_config 内，与供应商按适配器绑定）
+    if "provider_config" in updates:
+        legacy_adapter = updates.get("adapter_type") or record.adapter_type
+        legacy_model = updates.get("model", record.model)
+        pc = normalize_provider_config(
+            updates["provider_config"], legacy_adapter=legacy_adapter, legacy_model=legacy_model
+        )
+        updates["provider_config"] = pc
+        updates["model"] = _effective_model(pc, legacy_adapter, legacy_model or "")
     for key, value in updates.items():
         setattr(record, key, value)
     await db.flush()
     return _to_out(record)
+
+
+@router.get("/agents/provider-scan", response_model=ProviderScanOut)
+async def provider_scan(adapter: str) -> ProviderScanOut:
+    """扫描本地 codex / claude-code 配置，供「默认」供应商模式回显检测到的供应商。"""
+    return ProviderScanOut(**scan_provider(adapter))

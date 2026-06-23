@@ -30,10 +30,12 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
+from app.adapters.attachments import to_codex_items
 from app.adapters.base import (
     AdapterContext,
     ICodeAdapter,
@@ -41,7 +43,6 @@ from app.adapters.base import (
     UnifiedEvent,
     UnifiedSandboxLevel,
 )
-from app.adapters.attachments import to_codex_items
 from app.adapters.codex.notification_converter import ADAPTER_NAME, convert_notification
 from app.config import LocalMCPConfig, load_mcp_servers
 from app.security.command_whitelist import CommandVerdict, check_command
@@ -115,6 +116,72 @@ SANDBOX_WIRE: dict[UnifiedSandboxLevel, str] = {
 
 _APPROVAL_METHOD_COMMAND = "item/commandExecution/requestApproval"
 _APPROVAL_METHOD_FILE_CHANGE = "item/fileChange/requestApproval"
+
+
+def _whitelist_precheck(
+    method: str, command: str | None, *, enabled: bool
+) -> tuple[str, str] | None:
+    """命令审批白名单前置判定（纯函数，供 approval_handler 复用 + 单测）。
+
+    返回 (decision, reason)：ALLOWED→("accept", reason) 自动放行 / BLOCKED→("decline", reason)
+    自动拦截；非命令审批、未启用、缺命令、NEEDS_APPROVAL 一律返回 None（交审批模式或人工）。
+    """
+    if not enabled or method != _APPROVAL_METHOD_COMMAND or not command:
+        return None
+    result = check_command(str(command))
+    if result.verdict is CommandVerdict.ALLOWED:
+        return "accept", result.reason
+    if result.verdict is CommandVerdict.BLOCKED:
+        return "decline", result.reason
+    return None
+
+
+# codex 启动期重试：共享 codex_home 的 sqlite 状态库在子进程快速连发 / 并发时偶发
+# disk I/O error(1546)（上个子进程 close 后 WAL/SHM 锁释放有延迟），表现为新进程
+# initialize 时 TransportClosedError。退避重试可吸收该瞬时争用，且保留同 home 的会话续接。
+_CODEX_INIT_ATTEMPTS = 3
+_CODEX_INIT_BACKOFF_S = 0.6
+
+
+def _is_transient_bringup_error(
+    exc: BaseException, transient_types: tuple[type[BaseException], ...]
+) -> bool:
+    """codex 启动期可重试错误判定（保守）：仅 transient 传输关闭 / sqlite 磁盘 I/O 才重试。
+
+    精确类型命中（TransportClosedError）优先；兜底按错误文本含 sqlite / disk I/O 关键字
+    （不同 SDK 版本异常类型可能不同）。config 解析失败 / 401 / 403 等确定性错误均不命中，
+    立即抛出不浪费重试。
+    """
+    if transient_types and isinstance(exc, transient_types):
+        return True
+    text = str(exc).lower()
+    return "disk i/o error" in text or "sqlite" in text
+
+
+def _bringup_with_retry(
+    attempt: Callable[[], Any],
+    *,
+    attempts: int,
+    backoff_s: float,
+    is_retryable: Callable[[BaseException], bool],
+    sleep: Callable[[float], None],
+) -> Any:
+    """codex 启动（create+start+initialize+thread）失败退避重试（纯函数，便于单测）。
+
+    attempt 每次须自管理其半成品 client 的清理后再抛出；可重试错误退避后重建，
+    不可重试或耗尽次数则原样抛出最后一个异常。线性退避 backoff_s*(i+1)。
+    """
+    last: BaseException | None = None
+    for i in range(attempts):
+        try:
+            return attempt()
+        except BaseException as exc:  # noqa: BLE001 -- 由 is_retryable 精确分流可/不可重试
+            last = exc
+            if i >= attempts - 1 or not is_retryable(exc):
+                raise
+            sleep(backoff_s * (i + 1))
+    assert last is not None  # pragma: no cover -- attempts>=1 必经上面 return/raise
+    raise last
 
 
 def _auto_decision_event(
@@ -196,6 +263,13 @@ class CodexAdapter(ICodeAdapter):
                 adapter=self.name,
             )
             return
+        # 启动期重试用：transient 传输关闭异常类型（版本缺失则空元组，靠文本兜底判定）
+        try:
+            from openai_codex.errors import TransportClosedError
+
+            _transient_types: tuple[type[BaseException], ...] = (TransportClosedError,)
+        except Exception:
+            _transient_types = ()
 
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[UnifiedEvent | None] = asyncio.Queue()
@@ -250,21 +324,18 @@ class CodexAdapter(ICodeAdapter):
             # 白名单三级前置判定（仅命令执行）：ALLOWED 放行 / BLOCKED 拦截。
             # 自动决策走独立 approval_auto 事件（见 _auto_decision_event），不占用
             # approval_request/approval_resolved 人工审批通道。
-            if (
-                self._whitelist_precheck
-                and method == _APPROVAL_METHOD_COMMAND
-                and info.get("command")
-            ):
-                result = check_command(str(info["command"]))
-                if result.verdict is CommandVerdict.ALLOWED:
+            pre = _whitelist_precheck(
+                method, info.get("command"), enabled=self._whitelist_precheck
+            )
+            if pre is not None:
+                decision, reason = pre
+                if decision == "accept":
                     emit(_auto_decision_event("allow", "whitelist", info))
-                    return {"decision": "accept"}
-                if result.verdict is CommandVerdict.BLOCKED:
+                else:
                     emit(_auto_decision_event(
-                        "deny", "whitelist", info,
-                        reason=result.reason, risk_level="high",
+                        "deny", "whitelist", info, reason=reason, risk_level="high",
                     ))
-                    return {"decision": "decline"}
+                return {"decision": decision}
 
             if auto_decision is not None:
                 emit(_auto_decision_event(
@@ -344,17 +415,38 @@ class CodexAdapter(ICodeAdapter):
                     config_overrides=tuple(overrides),
                     env=sdk_env or None,
                 )
-                client = CodexClient(config=cfg, approval_handler=approval_handler)
-                active.client = client
-                client.start()
-                client.initialize()
 
-                if ctx.session_id:
-                    resumed = client.thread_resume(ctx.session_id, wire_params)
-                    thread_id = resumed.thread.id
-                else:
-                    started = client.thread_start(wire_params)
-                    thread_id = started.thread.id
+                def _bring_up() -> tuple[Any, str]:
+                    """create+start+initialize+thread；失败先关半成品 client 再抛，供退避重试。"""
+                    c = CodexClient(config=cfg, approval_handler=approval_handler)
+                    try:
+                        c.start()
+                        c.initialize()
+                        if ctx.session_id:
+                            tid = c.thread_resume(ctx.session_id, wire_params).thread.id
+                        else:
+                            tid = c.thread_start(wire_params).thread.id
+                        return c, tid
+                    except BaseException:
+                        try:
+                            c.close()
+                        except Exception:
+                            logger.warning(
+                                "Codex client close during bring-up retry failed",
+                                exc_info=True,
+                            )
+                        raise
+
+                # 共享 codex_home sqlite 瞬时争用（disk I/O error）退避重试；config/鉴权等
+                # 确定性错误不重试（_is_transient_bringup_error 分流）。保留同 home 会话续接。
+                client, thread_id = _bringup_with_retry(
+                    _bring_up,
+                    attempts=_CODEX_INIT_ATTEMPTS,
+                    backoff_s=_CODEX_INIT_BACKOFF_S,
+                    is_retryable=lambda e: _is_transient_bringup_error(e, _transient_types),
+                    sleep=time.sleep,
+                )
+                active.client = client
                 active.thread_id = thread_id
                 emit(UnifiedEvent(
                     type="started",

@@ -1,124 +1,25 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
-import {
-  ListTodo,
-  FileDiff,
-  Monitor,
-  MessageCircle,
-  Users,
-  Files,
-  FileText,
-  FolderPlus,
-  AtSign,
-  SquareSlash
-} from 'lucide-react'
-import { useAppStore, resolveMembers } from '../../store'
-import type { Message, RightTab } from '../../types'
+import { MessageCircle, FolderPlus, AtSign, SquareSlash } from 'lucide-react'
+import { useAppStore } from '../../store'
+import type { Message } from '../../types'
 import { MessageBubble } from './MessageBubble'
-import { ToolCallGroup } from './ToolCallGroup'
+import { AgentTurnCard } from './AgentTurnCard'
 import { MessageInput } from './MessageInput'
-import { AgentStatusBar } from './AgentStatusBar'
-import { Avatar } from '../ui/Avatar'
-import { Badge } from '../ui/Badge'
-import { Tooltip } from '../ui/Tooltip'
-import { getRoleColor, getRoleLabel } from '../ui/role'
+import { ConversationHeader } from '../layout/ConversationHeader'
 import { useT, t as tFn } from '../../i18n'
-
-/** 顶栏成员头像堆叠（前 4 + 「+N」），点击打开群设置 */
-function MemberStack(): React.JSX.Element | null {
-  const tr = useT()
-  const activeId = useAppStore((s) => s.activeConversationId)
-  const conversations = useAppStore((s) => s.conversations)
-  const agents = useAppStore((s) => s.agents)
-  const conv = conversations.find((c) => c.id === activeId)
-  const members = useMemo(() => resolveMembers(conv, agents), [conv, agents])
-
-  if (members.length === 0) return null
-
-  const shown = members.slice(0, 4)
-  const rest = members.length - shown.length
-
-  return (
-    <Tooltip content={tr('chat.memberStackTitle', { count: members.length })} placement="bottom">
-      <button
-        onClick={() => useAppStore.getState().toggleGroupPanel()}
-        aria-label={tr('chat.memberStackTitle', { count: members.length })}
-        className="flex items-center border-none bg-transparent cursor-pointer pl-1"
-      >
-        {shown.map((m, i) => (
-          <span
-            key={m.id}
-            className="rounded-full"
-            style={{
-              marginLeft: i === 0 ? 0 : -8,
-              boxShadow: '0 0 0 2px var(--color-bg-container)',
-              borderRadius: '50%',
-              zIndex: shown.length - i
-            }}
-          >
-            <Avatar role={m.role} size="sm" />
-          </span>
-        ))}
-        {rest > 0 && (
-          <span
-            className="flex items-center justify-center rounded-full text-[10px] font-semibold"
-            style={{
-              width: 28,
-              height: 28,
-              marginLeft: -8,
-              background: 'var(--color-bg-spotlight)',
-              color: 'var(--color-text-secondary)',
-              boxShadow: '0 0 0 2px var(--color-bg-container)'
-            }}
-          >
-            +{rest}
-          </span>
-        )}
-      </button>
-    </Tooltip>
-  )
-}
-
-function ToolbarButton({
-  onClick,
-  title,
-  icon,
-  label,
-  active,
-  pulse
-}: {
-  onClick: () => void
-  title: string
-  icon: React.ReactNode
-  label: string
-  active?: boolean
-  pulse?: boolean
-}): React.JSX.Element {
-  return (
-    <Tooltip content={title} placement="bottom">
-      <button
-        onClick={onClick}
-        aria-label={title}
-        className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs hover-spotlight"
-        style={{ color: active ? 'var(--color-brand)' : 'var(--color-text-secondary)' }}
-      >
-        {icon}
-        <span className="chat-toolbar-label">{label}</span>
-        {pulse && (
-          <span
-            className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full animate-pulse"
-            style={{ background: 'var(--color-warning)' }}
-          />
-        )}
-      </button>
-    </Tooltip>
-  )
-}
 
 /** 消息流渲染单元：消息（含聚合标记）/ 连续工具调用组 / 时间分组 pill */
 type FeedItem =
   | { kind: 'message'; msg: Message; grouped: boolean }
-  | { kind: 'tools'; msgs: Message[] }
+  | { kind: 'turn'; id: string; steps: Message[]; answer: Message | null }
   | { kind: 'time'; id: string; label: string }
+
+/** agent 侧消息：思考 / 工具 / 答案，按 turn（一次任务执行）有序聚合 */
+const AGENT_SIDE = new Set<Message['type']>(['thinking', 'tool', 'agent'])
+
+function turnKey(m: Message): string {
+  return `${m.agentRole ?? ''}|${m.agentName ?? ''}`
+}
 
 const TIME_GROUP_GAP_MS = 5 * 60_000
 
@@ -137,49 +38,80 @@ function timeGroupLabel(iso: string): string {
 
 /** 构建消息流：>5 分钟插入时间 pill；同 Agent 连续消息聚合（仅首条带头像名字，
  *  飞书模式）；相邻同 agent 工具消息聚合为折叠组（Claude.ai 模式）。 */
+/** 构建消息流：
+ *  - agent 侧（思考/工具/答案）按 turn 聚合（同 agent、taskId 不冲突的连续段）为 AgentTurnCard，
+ *    保留真实时间顺序；turn 内最后一条 agent 答案为主体，其余为「执行过程」步骤。
+ *  - user/system/error/approval 作为独立气泡；连续 user 紧凑聚合。
+ *  - 相邻 turn / 独立项之间按 >5min 间隔插入时间 pill（turn 内部不插）。 */
 function buildFeed(messages: Message[]): FeedItem[] {
   const items: FeedItem[] = []
   let lastTs: number | null = null
   let prevMsg: Message | null = null
+  let turn: { key: string; taskId?: string; msgs: Message[] } | null = null
+
+  const flushTurn = (): void => {
+    if (!turn) return
+    const ms = turn.msgs
+    let answerIdx = -1
+    for (let i = ms.length - 1; i >= 0; i--) {
+      if (ms[i].type === 'agent') {
+        answerIdx = i
+        break
+      }
+    }
+    const answer = answerIdx >= 0 ? ms[answerIdx] : null
+    const steps = answer ? ms.filter((m) => m !== answer) : ms
+    items.push({ kind: 'turn', id: `turn_${ms[0].id}`, steps, answer })
+    turn = null
+  }
+
+  // 仅在新 turn / 独立项开头按间隔插入时间 pill（turn 内部不插）
+  const maybeTimePill = (msg: Message, ts: number): boolean => {
+    if (Number.isNaN(ts)) return false
+    if (lastTs === null || ts - lastTs > TIME_GROUP_GAP_MS) {
+      const label = timeGroupLabel(msg.rawTimestamp!)
+      if (label) {
+        items.push({ kind: 'time', id: `time_${msg.id}`, label })
+        return true
+      }
+    }
+    return false
+  }
 
   for (const msg of messages) {
-    // 时间分组（thinking/tool 等过程消息也参与计时，pill 只插在可见间隔处）
     const ts = msg.rawTimestamp ? new Date(msg.rawTimestamp).getTime() : NaN
-    let timeInserted = false
-    if (!Number.isNaN(ts)) {
-      if (lastTs === null || ts - lastTs > TIME_GROUP_GAP_MS) {
-        const label = timeGroupLabel(msg.rawTimestamp!)
-        if (label) {
-          items.push({ kind: 'time', id: `time_${msg.id}`, label })
-          timeInserted = true
-        }
-      }
-      lastTs = ts
-    }
+    const taskId = msg.taskId
+    // turn 归属：带 taskId 的任意消息（含同任务的 system/error），或 agent 侧消息（流式期 taskId 未回填兜底）
+    const turnBound = taskId !== undefined || AGENT_SIDE.has(msg.type)
 
-    if (msg.type === 'tool') {
-      const last = items[items.length - 1]
-      if (last && last.kind === 'tools' && last.msgs[0].agentRole === msg.agentRole) {
-        last.msgs.push(msg)
+    if (turnBound) {
+      const key = turnKey(msg)
+      const sameTurn =
+        turn !== null &&
+        ((taskId !== undefined && turn.taskId === taskId) ||
+          (turn.key === key && (turn.taskId === undefined || taskId === undefined)))
+      if (sameTurn && turn) {
+        turn.msgs.push(msg)
+        if (turn.taskId === undefined && taskId !== undefined) turn.taskId = taskId
       } else {
-        items.push({ kind: 'tools', msgs: [msg] })
+        flushTurn()
+        maybeTimePill(msg, ts)
+        turn = { key, taskId, msgs: [msg] }
       }
       prevMsg = msg
+      if (!Number.isNaN(ts)) lastTs = ts
       continue
     }
 
-    // 连续聚合：同 type（agent/user）且同 agent 身份、未被时间 pill 或其它类型隔断
-    const groupable = msg.type === 'agent' || msg.type === 'user'
+    flushTurn()
+    const timeInserted = maybeTimePill(msg, ts)
     const grouped =
-      groupable &&
-      !timeInserted &&
-      prevMsg !== null &&
-      prevMsg.type === msg.type &&
-      prevMsg.agentRole === msg.agentRole &&
-      prevMsg.agentName === msg.agentName
+      msg.type === 'user' && !timeInserted && prevMsg !== null && prevMsg.type === 'user'
     items.push({ kind: 'message', msg, grouped })
     prevMsg = msg
+    if (!Number.isNaN(ts)) lastTs = ts
   }
+  flushTurn()
   return items
 }
 
@@ -209,138 +141,65 @@ function LoadOlderButton({ onLoad }: { onLoad: () => void }): React.JSX.Element 
   )
 }
 
-/** Agent 工作中指示器（会话 running 且没有正在流式输出的气泡时显示）。
- *  绑定当前 running 任务的角色，多 Agent 协作时可区分谁在工作。 */
-function WorkingIndicator({ role, name }: { role?: string; name?: string }): React.JSX.Element {
-  const roleColor = getRoleColor(role ?? 'orchestrator')
-  return (
-    <div className="flex items-start gap-2.5 px-4 my-2 animate-fade-in">
-      <Avatar role={role ?? 'orchestrator'} size="sm" className="mt-0.5" />
-      <div className="min-w-0">
-        {name && (
-          <div className="text-xs font-semibold mb-1" style={{ color: roleColor }}>
-            {name}
-          </div>
-        )}
-        <div
-          className="flex items-center gap-1.5 px-3.5 py-3 rounded-lg"
-          style={{
-            background: 'var(--color-bg-container)',
-            border: '1px solid var(--color-border)',
-            borderRadius: '4px var(--radius-bubble) var(--radius-bubble) var(--radius-bubble)',
-            boxShadow: `0 0 16px ${roleColor}22`
-          }}
-        >
-          <span className="typing-dot" />
-          <span className="typing-dot" />
-          <span className="typing-dot" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** 空态：品牌光斑背景 + 6 角色色轨道编队 + 引导卡片 */
-const ORBIT_ROLES = ['orchestrator', 'planner', 'coder', 'reviewer', 'preview', 'deployer']
-
-function EmptyState(): React.JSX.Element {
+/** 空态：静态品牌徽标 + 引导卡片（去旋转光环 / 去彩色辉光，方向二·暖中性）。
+ *  noSelection：未选会话；noMessages：会话已建但还没消息（去掉「新建项目」卡）。*/
+function EmptyState({
+  variant = 'noSelection'
+}: {
+  variant?: 'noSelection' | 'noMessages'
+}): React.JSX.Element {
   const tr = useT()
+  const isStart = variant === 'noMessages'
   return (
     <div
       className="flex-1 flex items-center justify-center relative overflow-hidden"
       style={{ background: 'var(--color-bg-layout)' }}
     >
-      {/* 品牌色光斑（仅品牌触点允许渐变/光效） */}
-      <div
-        className="absolute pointer-events-none"
-        style={{
-          width: 420,
-          height: 420,
-          top: '8%',
-          left: '14%',
-          background: 'radial-gradient(circle, var(--color-brand) 0%, transparent 65%)',
-          opacity: 0.1,
-          filter: 'blur(8px)'
-        }}
-      />
-      <div
-        className="absolute pointer-events-none"
-        style={{
-          width: 360,
-          height: 360,
-          bottom: '6%',
-          right: '10%',
-          background: 'radial-gradient(circle, var(--color-accent) 0%, transparent 65%)',
-          opacity: 0.1,
-          filter: 'blur(8px)'
-        }}
-      />
-
       <div className="text-center relative z-10 px-8">
-        {/* 多 Agent 轨道编队：中心 Logo + 角色色圆点缓慢旋转 */}
-        <div className="relative w-36 h-36 mx-auto mb-6">
-          <div
-            className="absolute inset-0 rounded-full"
-            style={{ border: '1px dashed var(--color-border)' }}
-          />
-          <div className="absolute inset-0" style={{ animation: 'orbitSpin 24s linear infinite' }}>
-            {ORBIT_ROLES.map((role, i) => {
-              const angle = (i / ORBIT_ROLES.length) * 2 * Math.PI
-              return (
-                <span
-                  key={role}
-                  className="absolute w-2.5 h-2.5 rounded-full"
-                  style={{
-                    background: getRoleColor(role),
-                    left: `calc(50% + ${Math.cos(angle) * 72}px - 5px)`,
-                    top: `calc(50% + ${Math.sin(angle) * 72}px - 5px)`,
-                    boxShadow: `0 0 8px ${getRoleColor(role)}66`
-                  }}
-                />
-              )
-            })}
-          </div>
-          <div
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{
-              background: 'var(--gradient-brand)',
-              boxShadow: 'var(--shadow-brand-lg)'
-            }}
-          >
-            <MessageCircle size={24} color="#fff" />
-          </div>
+        {/* 静态品牌徽标：中性卡片底 + 细描边，无旋转 / 无辉光 */}
+        <div
+          className="w-16 h-16 mx-auto mb-6 rounded-2xl flex items-center justify-center"
+          style={{
+            background: 'var(--color-bg-container)',
+            border: '1px solid var(--color-border)',
+            boxShadow: 'var(--shadow-sm)'
+          }}
+        >
+          <MessageCircle size={26} style={{ color: 'var(--color-brand)' }} />
         </div>
 
         <p className="text-[15px] font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-          {tr('chat.empty.title')}
+          {tr(isStart ? 'chat.empty.startTitle' : 'chat.empty.title')}
         </p>
         <p className="text-xs mt-1.5 mb-7" style={{ color: 'var(--color-text-secondary)' }}>
-          {tr('chat.empty.subtitle')}
+          {tr(isStart ? 'chat.empty.startSubtitle' : 'chat.empty.subtitle')}
         </p>
 
         {/* 引导卡片 */}
         <div className="flex items-stretch justify-center gap-3">
-          <button
-            onClick={() => useAppStore.getState().setNewProjectOpen(true)}
-            className="card-hover w-40 p-4 rounded-xl text-left cursor-pointer"
-            style={{
-              background: 'var(--color-bg-container)',
-              border: '1px solid var(--color-border-light)'
-            }}
-          >
-            <span
-              className="flex items-center justify-center w-8 h-8 rounded-lg mb-2.5"
-              style={{ background: 'var(--gradient-brand)' }}
+          {!isStart && (
+            <button
+              onClick={() => useAppStore.getState().setNewProjectOpen(true)}
+              className="card-hover w-40 p-4 rounded-xl text-left cursor-pointer"
+              style={{
+                background: 'var(--color-bg-container)',
+                border: '1px solid var(--color-border-light)'
+              }}
             >
-              <FolderPlus size={15} color="#fff" />
-            </span>
-            <div className="text-xs font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-              {tr('chat.empty.newProjectTitle')}
-            </div>
-            <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-secondary)' }}>
-              {tr('chat.empty.newProjectDesc')}
-            </div>
-          </button>
+              <span
+                className="flex items-center justify-center w-8 h-8 rounded-lg mb-2.5"
+                style={{ background: 'var(--gradient-brand)' }}
+              >
+                <FolderPlus size={15} color="#fff" />
+              </span>
+              <div className="text-xs font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+                {tr('chat.empty.newProjectTitle')}
+              </div>
+              <div className="text-[11px] mt-1" style={{ color: 'var(--color-text-secondary)' }}>
+                {tr('chat.empty.newProjectDesc')}
+              </div>
+            </button>
+          )}
           <div
             className="w-40 p-4 rounded-xl text-left"
             style={{
@@ -388,27 +247,14 @@ function EmptyState(): React.JSX.Element {
 }
 
 export function ChatWindow(): React.JSX.Element {
-  const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
-  const conversations = useAppStore((s) => s.conversations)
   const messagesMap = useAppStore((s) => s.messages)
-  const tasksMap = useAppStore((s) => s.tasks)
   const messages = useMemo(
     () => (activeId ? (messagesMap[activeId] ?? []) : []),
     [activeId, messagesMap]
   )
-  const activeDiff = useAppStore((s) => s.activeDiff)
-  const previewUrl = useAppStore((s) => s.previewUrl)
-  const groupPanelOpen = useAppStore((s) => s.groupPanelOpen)
-  const rightTab = useAppStore((s) => s.rightTab)
-  const pendingCount = useAppStore((s) => s.pendingApprovals.length)
   const scrollRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
-
-  const setTab = (tab: RightTab): void => useAppStore.getState().setRightTab(tab)
-  const toggleGroup = (): void => useAppStore.getState().toggleGroupPanel()
-
-  const conv = conversations.find((c) => c.id === activeId)
 
   // 智能滚动：仅当用户停留在底部附近时跟随新消息，向上翻阅历史不被拽回
   const handleScroll = useCallback(() => {
@@ -448,116 +294,39 @@ export function ChatWindow(): React.JSX.Element {
   }
 
   const feed = buildFeed(messages)
-  const lastMsg = messages[messages.length - 1]
-  const lastToolRunning =
-    lastMsg?.type === 'tool' && (lastMsg.toolStatus ?? 'running') === 'running'
-  const showWorking = conv?.status === 'running' && !lastMsg?.streaming && !lastToolRunning
-  const runningTask = (activeId ? (tasksMap[activeId] ?? []) : []).find(
-    (task) => task.status === 'running'
-  )
+  const emptyFeed = feed.length === 0
 
   return (
     <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--color-bg-layout)' }}>
-      <div
-        className="chat-header flex items-center justify-between gap-2 px-5 py-3 shrink-0 overflow-hidden"
-        style={{
-          background: 'var(--color-bg-container)',
-          borderBottom: '1px solid var(--color-border-light)'
-        }}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span
-            className="text-sm font-semibold truncate"
-            style={{ color: 'var(--color-text-primary)' }}
-          >
-            {conv?.title}
-          </span>
-          {conv?.projectName && <Badge variant="ghost">{conv.projectName}</Badge>}
-          {conv?.status === 'running' && (
-            <Badge variant="brand" size="sm">
-              {tr('common.status.running')}
-            </Badge>
-          )}
-        </div>
+      <ConversationHeader />
 
-        <div className="flex items-center gap-2 shrink-0">
-          <MemberStack />
-          <div className="flex items-center gap-0.5">
-            <ToolbarButton
-              onClick={toggleGroup}
-              title={tr('chat.toolbar.group')}
-              icon={<Users size={14} />}
-              label={tr('chat.toolbar.group')}
-              active={groupPanelOpen}
-            />
-            {(pendingCount > 0 || activeDiff) && (
-              <ToolbarButton
-                onClick={() => setTab('review')}
-                title={tr('chat.toolbar.reviewTitle')}
-                icon={<FileDiff size={14} />}
-                label={tr('chat.toolbar.review')}
-                active={rightTab === 'review'}
-                pulse={pendingCount > 0 || activeDiff?.status === 'pending'}
-              />
-            )}
-            <ToolbarButton
-              onClick={() => setTab('task')}
-              title={tr('chat.toolbar.taskTitle')}
-              icon={<ListTodo size={14} />}
-              label={tr('chat.toolbar.task')}
-              active={rightTab === 'task'}
-            />
-            <ToolbarButton
-              onClick={() => setTab('plan')}
-              title={tr('chat.toolbar.planTitle')}
-              icon={<FileText size={14} />}
-              label={tr('chat.toolbar.plan')}
-              active={rightTab === 'plan'}
-            />
-            <ToolbarButton
-              onClick={() => setTab('git')}
-              title={tr('chat.toolbar.filesTitle')}
-              icon={<Files size={14} />}
-              label={tr('chat.toolbar.files')}
-              active={rightTab === 'git'}
-            />
-            <ToolbarButton
-              onClick={() => setTab('preview')}
-              title={tr('chat.toolbar.preview')}
-              icon={<Monitor size={14} />}
-              label={tr('chat.toolbar.preview')}
-              active={rightTab === 'preview'}
-              pulse={!!previewUrl}
-            />
+      {emptyFeed ? (
+        <>
+          <EmptyState variant="noMessages" />
+          <MessageInput />
+        </>
+      ) : (
+        <>
+          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto py-4 px-4">
+            <LoadOlderButton onLoad={handleLoadOlder} />
+            {feed.map((item) => {
+              if (item.kind === 'turn') {
+                return <AgentTurnCard key={item.id} steps={item.steps} answer={item.answer} />
+              }
+              if (item.kind === 'time') {
+                return (
+                  <div key={item.id} className="flex justify-center my-3">
+                    <span className="time-pill tabular-nums">{item.label}</span>
+                  </div>
+                )
+              }
+              return <MessageBubble key={item.msg.id} msg={item.msg} grouped={item.grouped} />
+            })}
           </div>
-        </div>
-      </div>
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto py-4 px-4">
-        <LoadOlderButton onLoad={handleLoadOlder} />
-        {feed.map((item) => {
-          if (item.kind === 'tools') {
-            return <ToolCallGroup key={item.msgs[0].id} msgs={item.msgs} />
-          }
-          if (item.kind === 'time') {
-            return (
-              <div key={item.id} className="flex justify-center my-3">
-                <span className="time-pill tabular-nums">{item.label}</span>
-              </div>
-            )
-          }
-          return <MessageBubble key={item.msg.id} msg={item.msg} grouped={item.grouped} />
-        })}
-        {showWorking && (
-          <WorkingIndicator
-            role={runningTask?.agentRole}
-            name={runningTask ? getRoleLabel(runningTask.agentRole) : undefined}
-          />
-        )}
-      </div>
-
-      <AgentStatusBar />
-      <MessageInput />
+          <MessageInput />
+        </>
+      )}
     </div>
   )
 }

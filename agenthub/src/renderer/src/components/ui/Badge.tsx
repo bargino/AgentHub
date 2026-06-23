@@ -9,16 +9,11 @@ const badgeVariants = cva(
       variant: {
         default:
           'border-transparent bg-[var(--color-bg-spotlight)] text-[var(--color-text-secondary)]',
-        brand:
-          'border-transparent bg-[var(--color-brand-bg)] text-[var(--color-brand)]',
-        success:
-          'border-transparent bg-[var(--color-success-bg)] text-[var(--color-success)]',
-        warning:
-          'border-transparent bg-[var(--color-warning-bg)] text-[var(--color-warning-text)]',
-        error:
-          'border-transparent bg-[var(--color-error-bg)] text-[var(--color-error)]',
-        ghost:
-          'border-[var(--color-border)] bg-transparent text-[var(--color-text-tertiary)]',
+        brand: 'border-transparent bg-[var(--color-brand-bg)] text-[var(--color-brand)]',
+        success: 'border-transparent bg-[var(--color-success-bg)] text-[var(--color-success)]',
+        warning: 'border-transparent bg-[var(--color-warning-bg)] text-[var(--color-warning-text)]',
+        error: 'border-transparent bg-[var(--color-error-bg)] text-[var(--color-error)]',
+        ghost: 'border-[var(--color-border)] bg-transparent text-[var(--color-text-tertiary)]',
         secondary: 'border-transparent bg-secondary text-secondary-foreground',
         destructive: 'border-transparent bg-destructive text-white',
         outline: 'text-foreground border-border'
@@ -36,8 +31,7 @@ const badgeVariants = cva(
 )
 
 export interface BadgeProps
-  extends React.ComponentProps<'span'>,
-    VariantProps<typeof badgeVariants> {}
+  extends React.ComponentProps<'span'>, VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, size, ...props }: BadgeProps): React.JSX.Element {
   return (

@@ -92,9 +92,17 @@ function TreeNode({
         title={node.path || node.name}
       >
         {open ? (
-          <ChevronDown size={12} className="shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+          <ChevronDown
+            size={12}
+            className="shrink-0"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          />
         ) : (
-          <ChevronRight size={12} className="shrink-0" style={{ color: 'var(--color-text-tertiary)' }} />
+          <ChevronRight
+            size={12}
+            className="shrink-0"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          />
         )}
         {open ? (
           <FolderOpen size={13} className="shrink-0" style={{ color: 'var(--color-brand)' }} />
@@ -107,7 +115,13 @@ function TreeNode({
       </button>
       {open &&
         children.map((c) => (
-          <TreeNode key={c.path} node={c} depth={depth + 1} activePath={activePath} onOpen={onOpen} />
+          <TreeNode
+            key={c.path}
+            node={c}
+            depth={depth + 1}
+            activePath={activePath}
+            onOpen={onOpen}
+          />
         ))}
     </>
   )
@@ -189,7 +203,11 @@ export function WorkspaceExplorer({ cid }: { cid: string }): React.JSX.Element {
       <div className="flex-1 overflow-y-auto py-1">
         {loading && !tree ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 size={18} className="animate-spin" style={{ color: 'var(--color-text-tertiary)' }} />
+            <Loader2
+              size={18}
+              className="animate-spin"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            />
           </div>
         ) : noWorkspace ? (
           <div className="flex flex-col items-center justify-center gap-2 py-12 px-6 text-center">
@@ -214,7 +232,10 @@ export function WorkspaceExplorer({ cid }: { cid: string }): React.JSX.Element {
               <TreeNode key={c.path} node={c} depth={0} activePath={activePath} onOpen={openPath} />
             ))}
             {tree.truncated && (
-              <div className="px-3 py-2 text-[11px]" style={{ color: 'var(--color-text-tertiary)' }}>
+              <div
+                className="px-3 py-2 text-[11px]"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
                 {tr('explorer.truncated')}
               </div>
             )}
@@ -266,7 +287,11 @@ export function WorkspaceExplorer({ cid }: { cid: string }): React.JSX.Element {
           <div className="flex-1 overflow-auto" style={{ background: 'var(--color-bg-code)' }}>
             {fileLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 size={18} className="animate-spin" style={{ color: 'var(--color-text-tertiary)' }} />
+                <Loader2
+                  size={18}
+                  className="animate-spin"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                />
               </div>
             ) : openFile?.binary ? (
               <FileStateHint icon={FileX} text={tr('explorer.binary')} />

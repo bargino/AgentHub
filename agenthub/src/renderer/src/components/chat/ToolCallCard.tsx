@@ -109,19 +109,25 @@ export function ToolCallCard({
           setUserToggled(true)
           setExpanded(!expanded)
         }}
-        className="flex items-center gap-2 w-full px-3 py-2 border-none bg-transparent cursor-pointer hover-spotlight"
+        className={`flex items-center w-full border-none bg-transparent cursor-pointer hover-spotlight ${
+          compact ? 'gap-1.5 px-2 py-1' : 'gap-2 px-3 py-2'
+        }`}
       >
         <ChevronRight
-          size={12}
+          size={compact ? 11 : 12}
           className="shrink-0 transition-transform duration-200"
           style={{
             color: 'var(--color-text-tertiary)',
             transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)'
           }}
         />
-        <Terminal size={14} className="shrink-0" style={{ color: 'var(--color-text-secondary)' }} />
+        <Terminal
+          size={compact ? 12 : 14}
+          className="shrink-0"
+          style={{ color: 'var(--color-text-secondary)' }}
+        />
         <span
-          className="shrink-0 text-left text-[var(--font-size-sm)] font-medium"
+          className={`shrink-0 text-left font-medium ${compact ? 'text-[11px]' : 'text-[var(--font-size-sm)]'}`}
           style={{ color: 'var(--color-text-primary)' }}
         >
           {msg.toolName}
@@ -153,19 +159,24 @@ export function ToolCallCard({
           </span>
         )}
         <StatusIcon
-          size={12}
+          size={compact ? 11 : 12}
           className={`shrink-0 ${config.animate ? 'animate-spin' : ''}`}
           style={{ color: config.iconColor }}
         />
-        <Badge variant={config.badgeVariant} size="sm">
-          {tr(config.labelKey)}
-        </Badge>
+        {/* 紧凑模式（在执行过程聚合卡内）省略状态徽标，仅留状态图标以节省空间 */}
+        {!compact && (
+          <Badge variant={config.badgeVariant} size="sm">
+            {tr(config.labelKey)}
+          </Badge>
+        )}
       </button>
 
       {expanded && msg.content && (
         <div
           ref={bodyRef}
-          className="px-3 py-2.5 text-[11px] leading-relaxed whitespace-pre-wrap break-all max-h-60 overflow-y-auto"
+          className={`leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${
+            compact ? 'px-2.5 py-1.5 text-[10px] max-h-44' : 'px-3 py-2.5 text-[11px] max-h-60'
+          }`}
           style={{
             background: 'var(--color-bg-code)',
             color: 'var(--color-text-code)',

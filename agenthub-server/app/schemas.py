@@ -124,10 +124,28 @@ class ApprovalOut(CamelModel):
 
 
 class ProviderConfig(CamelModel):
-    """Agent 独立 API 供应商配置（均可选，空 = 走本地 SDK 登录态）。"""
+    """单个适配器的供应商配置（模型名与供应商绑定，按适配器各自保存）。
 
+    mode=default：不注入凭据，走本地 CLI 登录态（base_url/auth_token 仅用于回显扫描结果）；
+    mode=custom：注入用户填写的 base_url/auth_token。
+    model：该适配器+供应商下使用的模型名（空 = SDK 默认模型）。
+    """
+
+    mode: str = "default"
     base_url: str = ""
     auth_token: str = ""
+    model: str = ""
+
+
+class ProviderScanOut(CamelModel):
+    """本地 codex/claude-code 配置扫描结果（供「默认」模式回显检测到的供应商）。"""
+
+    adapter: str
+    detected: bool = False
+    base_url: str = ""
+    model: str = ""
+    auth_source: str = ""
+    config_path: str = ""
 
 
 class SkillSpec(CamelModel):
@@ -158,7 +176,7 @@ class AgentOut(CamelModel):
     adapter_type: str = ""
     model: str = ""
     context_window: Optional[int] = None
-    provider_config: ProviderConfig = Field(default_factory=ProviderConfig)
+    provider_config: dict[str, ProviderConfig] = Field(default_factory=dict)
     capabilities: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
 
@@ -215,7 +233,7 @@ class AgentCreate(CamelModel):
     adapter_type: str = ""
     model: str = ""
     context_window: Optional[int] = None
-    provider_config: ProviderConfig = Field(default_factory=ProviderConfig)
+    provider_config: dict[str, ProviderConfig] = Field(default_factory=dict)
     capabilities: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
 
@@ -231,7 +249,7 @@ class AgentUpdate(CamelModel):
     adapter_type: Optional[str] = None
     model: Optional[str] = None
     context_window: Optional[int] = None
-    provider_config: Optional[ProviderConfig] = None
+    provider_config: Optional[dict[str, ProviderConfig]] = None
     capabilities: Optional[dict[str, Any]] = None
     enabled: Optional[bool] = None
 

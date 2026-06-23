@@ -1,4 +1,14 @@
-import { Plus, Search, Pin, PinOff, Archive, Trash2 } from 'lucide-react'
+import {
+  Plus,
+  Search,
+  Pin,
+  PinOff,
+  Archive,
+  Trash2,
+  ListFilter,
+  ChevronDown,
+  Check
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore, resolveMembers } from '../../store'
 import { useT } from '../../i18n'
@@ -120,6 +130,25 @@ const STATUS_MAP: Record<Conversation['status'], 'running' | 'idle' | 'offline'>
   idle: 'offline'
 }
 
+type FilterKey = 'all' | 'running' | 'waitingApproval' | 'pinned' | 'unread'
+
+const FILTER_ORDER: FilterKey[] = ['all', 'running', 'waitingApproval', 'pinned', 'unread']
+
+function matchesFilter(c: Conversation, filter: FilterKey): boolean {
+  switch (filter) {
+    case 'running':
+      return c.status === 'running'
+    case 'waitingApproval':
+      return c.status === 'waiting_approval'
+    case 'pinned':
+      return Boolean(c.pinned)
+    case 'unread':
+      return (c.unread ?? 0) > 0
+    default:
+      return true
+  }
+}
+
 function ConvItem({
   conv,
   active,
@@ -166,11 +195,11 @@ function ConvItem({
       )}
       <div className="relative shrink-0">
         <GroupAvatar roles={memberRoles} size={40} />
-        <span
-          className="absolute -bottom-0.5 -right-0.5 rounded-full p-[2px]"
-          style={{ background: active ? 'var(--color-brand-bg)' : 'var(--color-bg-container)' }}
-        >
-          <StatusDot status={STATUS_MAP[conv.status]} />
+        <span className="absolute -bottom-0.5 -right-0.5 rounded-full p-[2px]">
+          <StatusDot
+            status={STATUS_MAP[conv.status]}
+            color={conv.status === 'running' ? 'var(--color-success)' : undefined}
+          />
         </span>
       </div>
 
@@ -234,29 +263,38 @@ export function ConversationList(): React.JSX.Element {
   const wsStatus = useAppStore((s) => s.wsStatus)
   const newProjectOpen = useAppStore((s) => s.newProjectOpen)
   const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const [filterOpen, setFilterOpen] = useState(false)
   const [menu, setMenu] = useState<MenuState | null>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
+  const filterRef = useRef<HTMLDivElement>(null)
+
+  // 点击外部 / Esc 关闭筛选下拉
+  useEffect(() => {
+    if (!filterOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (!filterRef.current?.contains(e.target as Node)) setFilterOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setFilterOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [filterOpen])
 
   const handleContextMenu = (e: React.MouseEvent, conv: Conversation): void => {
     e.preventDefault()
     setMenu({ x: e.clientX, y: e.clientY, conv })
   }
 
-  // Ctrl/⌘+K 聚焦搜索
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        searchRef.current?.focus()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  const filtered = search
-    ? conversations.filter((c) => c.title.toLowerCase().includes(search.toLowerCase()))
-    : conversations
+  const filtered = conversations.filter((c) => {
+    if (!matchesFilter(c, filter)) return false
+    if (search && !c.title.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
 
   const loading = wsStatus !== 'connected' && conversations.length === 0
 
@@ -269,60 +307,128 @@ export function ConversationList(): React.JSX.Element {
         borderRight: '1px solid var(--color-border)'
       }}
     >
-      <div className="px-4 pt-4 pb-2">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold" style={{ color: 'var(--color-text-primary)' }}>
-            {tr('conv.title')}
-          </span>
-          <Tooltip content={tr('conv.newProject')} placement="bottom">
+      <div className="px-3 pt-3 pb-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search
+              size={14}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+              style={{ color: 'var(--color-text-tertiary)' }}
+            />
+            <input
+              type="text"
+              placeholder={tr('conv.search')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-[var(--radius-lg)] outline-none border border-transparent transition-all duration-150 bg-[var(--color-bg-spotlight)] focus:bg-[var(--color-bg-container)] focus:border-[var(--color-brand)] focus:shadow-[0_0_0_3px_var(--color-brand-bg)]"
+              style={{ color: 'var(--color-text-primary)' }}
+            />
+          </div>
+          <Tooltip content={tr('conv.filter.label')} placement="bottom">
             <button
-              onClick={() => useAppStore.getState().setNewProjectOpen(true)}
-              className="btn-press w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center text-white"
+              onClick={() => setFilterOpen((v) => !v)}
+              className="btn-ghost shrink-0 w-9 h-9 rounded-[var(--radius-lg)] flex items-center justify-center"
               style={{
-                background: 'var(--gradient-brand)',
-                boxShadow: 'var(--shadow-brand)',
-                border: 'none',
+                border: '1px solid var(--color-border)',
+                background:
+                  filter === 'all' ? 'var(--color-bg-container)' : 'var(--color-brand-bg)',
+                color: filter === 'all' ? 'var(--color-text-tertiary)' : 'var(--color-brand)',
                 cursor: 'pointer'
               }}
-              aria-label={tr('conv.newProject')}
+              aria-label={tr('conv.filter.label')}
+              aria-expanded={filterOpen}
             >
-              <Plus size={15} />
+              <ListFilter size={15} />
             </button>
           </Tooltip>
         </div>
 
-        <div className="relative">
-          <Search
-            size={14}
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-            style={{ color: 'var(--color-text-tertiary)' }}
-          />
-          <input
-            ref={searchRef}
-            type="text"
-            placeholder={tr('conv.search')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-8 pr-12 py-2 text-xs rounded-[var(--radius-lg)] outline-none border border-transparent transition-all duration-150 bg-[var(--color-bg-spotlight)] focus:bg-[var(--color-bg-container)] focus:border-[var(--color-brand)] focus:shadow-[0_0_0_3px_var(--color-brand-bg)]"
-            style={{ color: 'var(--color-text-primary)' }}
-          />
-          <kbd
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[10px] rounded pointer-events-none select-none"
+        <div ref={filterRef} className="relative flex items-center justify-between mt-3 mb-0.5">
+          <button
+            onClick={() => setFilterOpen((v) => !v)}
+            className="flex items-center gap-1 text-[13px] font-semibold rounded-[var(--radius-sm)]"
             style={{
-              color: 'var(--color-text-tertiary)',
-              background: 'var(--color-bg-container)',
-              border: '1px solid var(--color-border-light)',
-              fontFamily: 'inherit'
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--color-text-primary)',
+              cursor: 'pointer'
             }}
+            aria-haspopup="menu"
+            aria-expanded={filterOpen}
           >
-            Ctrl K
-          </kbd>
+            {tr(`conv.filter.${filter}`)}
+            <ChevronDown
+              size={14}
+              style={{
+                color: 'var(--color-text-tertiary)',
+                transform: filterOpen ? 'rotate(180deg)' : undefined,
+                transition: 'transform var(--transition-fast)'
+              }}
+            />
+          </button>
+          {filterOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 top-full mt-1 py-1 rounded-lg animate-menu-pop"
+              style={{
+                zIndex: 60,
+                minWidth: 168,
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border-light)',
+                boxShadow: 'var(--shadow-float)'
+              }}
+            >
+              {FILTER_ORDER.map((key) => {
+                const selected = key === filter
+                return (
+                  <button
+                    key={key}
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    onClick={() => {
+                      setFilter(key)
+                      setFilterOpen(false)
+                    }}
+                    className="flex items-center justify-between w-full px-3 py-1.5 text-xs border-none bg-transparent cursor-pointer hover-spotlight text-left"
+                    style={{
+                      color: selected ? 'var(--color-brand)' : 'var(--color-text-primary)',
+                      fontWeight: selected ? 600 : 400
+                    }}
+                  >
+                    {tr(`conv.filter.${key}`)}
+                    {selected && <Check size={13} />}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          <button
+            onClick={() => useAppStore.getState().setNewProjectOpen(true)}
+            className="btn-press flex items-center gap-1 pl-2 pr-2.5 h-7 rounded-[var(--radius-lg)] text-xs font-medium"
+            style={{
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-bg-container)',
+              color: 'var(--color-text-secondary)',
+              cursor: 'pointer'
+            }}
+            aria-label={tr('conv.newProject')}
+          >
+            <Plus size={14} style={{ color: 'var(--color-brand)' }} />
+            {tr('conv.newProject')}
+          </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto smooth-scroll pt-1 pb-2">
         {loading ? (
           <ListSkeleton />
+        ) : filtered.length === 0 ? (
+          <p
+            className="px-4 py-6 text-center text-xs"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
+            {tr('conv.filter.empty')}
+          </p>
         ) : (
           filtered.map((c) => (
             <ConvItem

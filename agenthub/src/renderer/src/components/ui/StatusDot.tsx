@@ -7,6 +7,8 @@ interface StatusDotProps {
   size?: 'sm' | 'md'
   label?: string
   className?: string
+  /** 覆盖状态默认色（仍保留该状态的脉冲与 a11y 标签） */
+  color?: string
 }
 
 const STATUS_CONFIG: Record<StatusType, { color: string; labelKey: string; pulse: boolean }> = {
@@ -23,10 +25,12 @@ export function StatusDot({
   status,
   size = 'sm',
   label,
-  className = ''
+  className = '',
+  color
 }: StatusDotProps): React.JSX.Element {
   const tr = useT()
   const cfg = STATUS_CONFIG[status]
+  const dotColor = color ?? cfg.color
   const d = DOT_SIZE[size]
   // 文本替代：状态不只靠颜色传达。无可见文字时给圆点加 role/aria-label/title；
   // 有可见文字时圆点设为装饰（aria-hidden），由文字承载语义。running 仍用脉冲作非颜色线索。
@@ -44,8 +48,8 @@ export function StatusDot({
           width: d,
           height: d,
           borderRadius: '50%',
-          background: cfg.color,
-          boxShadow: `0 0 0 2px ${cfg.color}22`,
+          background: dotColor,
+          boxShadow: `0 0 0 2px ${dotColor}22`,
           flexShrink: 0
         }}
       />

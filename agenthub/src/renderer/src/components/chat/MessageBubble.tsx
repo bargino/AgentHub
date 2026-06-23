@@ -367,7 +367,8 @@ export function MessageBubble({
             className="px-3.5 py-2.5 text-[13px] whitespace-pre-wrap break-words"
             style={{
               background: 'var(--bubble-user-bg)',
-              color: '#fff',
+              color: 'var(--bubble-user-text)',
+              border: '1px solid var(--bubble-user-border)',
               lineHeight: 'var(--leading-relaxed)',
               borderRadius: grouped
                 ? 'var(--radius-bubble)'
@@ -458,14 +459,12 @@ export function MessageBubble({
           }}
         >
           <MarkdownBody content={msg.content} />
-          {!msg.streaming &&
-            msg.meta?.clarify?.options &&
-            msg.meta.clarify.options.length > 0 && (
-              <ClarifyOptions
-                options={msg.meta.clarify.options}
-                recommended={msg.meta.clarify.recommended}
-              />
-            )}
+          {!msg.streaming && msg.meta?.clarify?.options && msg.meta.clarify.options.length > 0 && (
+            <ClarifyOptions
+              options={msg.meta.clarify.options}
+              recommended={msg.meta.clarify.recommended}
+            />
+          )}
           {!msg.streaming && msg.meta?.planConfirm && (
             <PlanConfirm
               conversationId={msg.conversationId}

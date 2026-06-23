@@ -1,6 +1,16 @@
 import { deleteJson, getJson, patchJson, postJson } from './http'
 import { t as translate } from '../i18n'
-import type { Agent, Conversation, Message, Task, DiffRecord, Approval } from '../types'
+import type {
+  Agent,
+  Conversation,
+  Message,
+  Task,
+  DiffRecord,
+  Approval,
+  Deployment,
+  ProviderConfigMap,
+  ProviderScan
+} from '../types'
 
 // 后端 DTO 与前端 types 仅在时间字段上有差异：ConversationOut.lastTime 与
 // MessageOut.timestamp 为 ISO 8601 字符串，需在本层格式化为 HH:mm 后再入 store，
@@ -151,10 +161,10 @@ export async function savePlanFile(
   path: string,
   content: string
 ): Promise<{ ok: boolean; path: string }> {
-  return patchJson<{ ok: boolean; path: string }>(
-    `/conversations/${conversationId}/plans/file`,
-    { path, content }
-  )
+  return patchJson<{ ok: boolean; path: string }>(`/conversations/${conversationId}/plans/file`, {
+    path,
+    content
+  })
 }
 
 export interface ContextUsage {
@@ -300,6 +310,26 @@ export async function stopPreview(conversationId: string): Promise<{ stopped: bo
   return postJson<{ stopped: boolean }>(`/conversations/${conversationId}/preview/stop`)
 }
 
+// ---- 部署：创建计划（可选 provider/config）→ 审批（人工确认）→ 后台执行 ----
+export async function createDeployment(
+  conversationId: string,
+  opts?: { provider?: string; config?: Record<string, unknown> }
+): Promise<Deployment> {
+  return postJson<Deployment>(`/conversations/${conversationId}/deployments`, opts)
+}
+
+/** 审批部署：approved=true 执行模拟部署并返回 success 记录；false 置为 rejected */
+export async function decideDeployment(
+  deploymentId: string,
+  approved: boolean
+): Promise<Deployment> {
+  return postJson<Deployment>(`/deployments/${deploymentId}/approve`, { approved })
+}
+
+export async function getDeployment(deploymentId: string): Promise<Deployment> {
+  return getJson<Deployment>(`/deployments/${deploymentId}`)
+}
+
 // ---- Agent ----
 export async function getAgents(): Promise<Agent[]> {
   return getJson<Agent[]>('/agents')
@@ -313,7 +343,7 @@ export async function createAgent(data: {
   group?: string
   adapterType?: string
   model?: string
-  providerConfig?: { baseUrl: string; authToken: string }
+  providerConfig?: ProviderConfigMap
 }): Promise<Agent> {
   return postJson<Agent>('/agents', data)
 }
@@ -328,9 +358,14 @@ export async function updateAgent(
     group?: string
     adapterType?: string
     model?: string
-    providerConfig?: { baseUrl: string; authToken: string }
+    providerConfig?: ProviderConfigMap
     enabled?: boolean
   }
 ): Promise<Agent> {
   return patchJson<Agent>(`/agents/${agentId}`, data)
+}
+
+/** 扫描本地 codex / claude-code 配置，供「默认」供应商模式回显检测到的供应商。 */
+export async function scanProvider(adapter: string): Promise<ProviderScan> {
+  return getJson<ProviderScan>(`/agents/provider-scan?adapter=${encodeURIComponent(adapter)}`)
 }

@@ -120,7 +120,7 @@ function TaskItem({
       {/* 节点：Avatar + 角色色圆环；running 光晕扩散；success checkmark 弹入 */}
       <div className="relative shrink-0" style={{ marginTop: 2 }}>
         <span
-          className="block rounded-full"
+          className="block rounded-[11px]"
           style={
             {
               padding: 2,

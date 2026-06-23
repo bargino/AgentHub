@@ -5,6 +5,7 @@ from typing import Any
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -60,8 +61,48 @@ def _tool_use_to_diff(tool_name: str, tool_input: Any) -> UnifiedEvent | None:
     )
 
 
+def _convert_stream_event(message: StreamEvent) -> list[UnifiedEvent]:
+    """include_partial_messages 下的增量流事件 -> text_delta / thinking（is_delta=True）。
+
+    message.event 是 Anthropic 原始 stream 事件，只取 content_block_delta 的
+    text_delta（正文）与 thinking_delta（思考），其余（message_start/stop、
+    content_block_start/stop、input_json_delta、signature_delta 等）忽略——工具入参与
+    最终整块由随后的 AssistantMessage 兜底转换，executor 按 is_delta 去重不会重复。
+    """
+    raw = message.event or {}
+    if raw.get("type") != "content_block_delta":
+        return []
+    delta = raw.get("delta") or {}
+    dtype = delta.get("type")
+    if dtype == "text_delta":
+        text = str(delta.get("text", "") or "")
+        if text:
+            return [
+                UnifiedEvent(
+                    type="text_delta",
+                    data={"text": text, "is_delta": True},
+                    adapter=ADAPTER_NAME,
+                )
+            ]
+    elif dtype == "thinking_delta":
+        thinking = str(delta.get("thinking", "") or "")
+        if thinking:
+            return [
+                UnifiedEvent(
+                    type="thinking",
+                    data={"text": thinking, "is_thinking": True, "is_delta": True},
+                    adapter=ADAPTER_NAME,
+                )
+            ]
+    return []
+
+
 def convert_message(message: Any) -> list[UnifiedEvent]:
     events: list[UnifiedEvent] = []
+
+    # 分段流式增量（include_partial_messages=True 时逐 token 下发）优先处理
+    if isinstance(message, StreamEvent):
+        return _convert_stream_event(message)
 
     if isinstance(message, AssistantMessage):
         for block in message.content:

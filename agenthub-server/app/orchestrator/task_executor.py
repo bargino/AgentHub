@@ -427,10 +427,13 @@ class TaskRunner:
 
         if event.type == "thinking":
             text = str(event.data.get("text", ""))
-            if text:
+            is_delta = bool(event.data.get("is_delta"))
+            # 流式开启后，最终整块（claude AssistantMessage 的 ThinkingBlock，无 is_delta）
+            # 与已逐 token 推送的增量重复，跳过避免内容翻倍；未流式时整块照常累积（兜底）
+            if text and not (self.delta_mode and not is_delta):
                 if self.thinking_started is None:
                     self.thinking_started = asyncio.get_event_loop().time()
-                if event.data.get("is_delta"):
+                if is_delta:
                     self.delta_mode = True
                 self.thinking_parts.append(text)
                 joined = self._join(self.thinking_parts)
@@ -444,8 +447,10 @@ class TaskRunner:
             # 正文到达 = 当前思考段结束，先收口思考再推正文
             await self._flush_thinking()
             text = str(event.data.get("text", ""))
-            if text:
-                if event.data.get("is_delta"):
+            is_delta = bool(event.data.get("is_delta"))
+            # 同上：流式开启后最终整块 TextBlock 与增量重复，跳过；未流式时整块照常累积
+            if text and not (self.delta_mode and not is_delta):
+                if is_delta:
                     self.delta_mode = True
                 self.text_parts.append(text)
                 joined = self._join(self.text_parts)

@@ -1,0 +1,72 @@
+name: ci
+
+# Epic A 质量门禁：每次 push / PR 跑后端(ruff/mypy/pytest) + 前端(typecheck/lint/build)。
+# 与 eval.yml（离线评测门禁）互补：本工作流守代码层回归，eval.yml 守编排准确率。
+#
+# 门禁策略（务必先读）：
+# - pytest = 硬门禁：失败即红灯（本地已验证 51 passed，是回归止血的核心）。
+# - ruff / mypy / 前端 typecheck-lint-build = 暂为 advisory（continue-on-error: true）。
+#   原因：app/ 存量约 244 处 ruff 告警、mypy strict 未全量验证、前端三件套未在 CI 验证；
+#   首跑就硬门禁会把所有存量债压成红灯、阻断全部 PR。
+# - 收尾路径：存量清零后，把对应步骤的 continue-on-error 改为 false 即转硬门禁；
+#   覆盖率基线稳定后，给 pytest 加 --cov-fail-under=NN。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: backend (ruff/mypy/pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agenthub-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # 运行时用基础依赖（与 eval.yml 同口径，无需 SDK extras）；dev 工具按 pyproject 声明范围单独装
+      - name: Install (runtime + dev tools)
+        run: |
+          pip install -e .
+          pip install "pytest>=8.2" "pytest-asyncio>=0.23" "pytest-cov>=5.0" "ruff>=0.4,<0.5" "mypy>=1.10"
+      # advisory：暴露存量但不阻断（存量清零后改 continue-on-error: false）
+      - name: Ruff (advisory)
+        continue-on-error: true
+        run: ruff check app/ tests/
+      # advisory：strict 模式未全量验证（存量清零后改 continue-on-error: false）
+      - name: Mypy (advisory)
+        continue-on-error: true
+        run: mypy app/
+      # 硬门禁：测试失败即红灯。--cov 仅报告可见性，暂不设 --cov-fail-under（基线稳定后再加）
+      - name: Pytest (gate)
+        run: pytest --cov=app --cov-report=term-missing
+
+  frontend:
+    name: frontend (typecheck/lint/build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agenthub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: agenthub/package-lock.json
+      - name: Install
+        run: npm ci
+      # advisory：三件套未在 CI 验证（逐项验证通过后改 continue-on-error: false）
+      - name: Typecheck (advisory)
+        continue-on-error: true
+        run: npm run typecheck
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: npm run lint
+      - name: Build (advisory)
+        continue-on-error: true
+        run: npm run build

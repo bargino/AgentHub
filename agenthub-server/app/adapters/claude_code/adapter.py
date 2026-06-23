@@ -139,6 +139,10 @@ class ClaudeCodeAdapter(ICodeAdapter):
             setting_sources=setting_sources,
             skills=skills,
             mcp_servers=mcp_servers,
+            # 开启分段流式：SDK 逐 token 下发 StreamEvent（content_block_delta），
+            # 由 message_converter 转为增量 text_delta/thinking（is_delta=True），
+            # 与 codex 字符级流式对齐；不开则整块 AssistantMessage 一次性到达，气泡无法流式。
+            include_partial_messages=True,
         )
         if ctx.system_prompt:
             options.system_prompt = {
