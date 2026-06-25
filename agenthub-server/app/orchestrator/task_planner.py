@@ -1,4 +1,4 @@
-"""需求 -> 结构化任务计划（PRD §3.1 / §6.1）。
+"""需求 -> 结构化任务spec（PRD §3.1 / §6.1）。
 
 调用 LLM 生成 {goal, tasks[]} JSON；LLM 不可用 / 解析失败时回退到规则模板，
 保证决策器异常时编排链路依然完整。
@@ -37,7 +37,7 @@ _DEFAULT_ROLES = ("planner", "coder", "reviewer", "deployer")
 _MIN_DECISION_CONFIDENCE = max(0.0, min(1.0, float(os.environ.get("AGENTHUB_MIN_DECISION_CONFIDENCE") or "0.55")))
 _HIGH_COMPLEXITY = max(1, int(os.environ.get("AGENTHUB_HIGH_COMPLEXITY") or "4"))
 
-# item 4：规划→批判→修订。仅对高复杂度 pipeline 计划跑一次自评改进（额外 1 次轻模型 LLM 调用）；
+# item 4：规划→批判→修订。仅对高复杂度 pipeline spec跑一次自评改进（额外 1 次轻模型 LLM 调用）；
 # 默认开，可用 AGENTHUB_PLAN_CRITIQUE=0 关闭。complexity 阈值与触发面用 _PLAN_CRITIQUE_COMPLEXITY。
 _PLAN_CRITIQUE_ON = (os.environ.get("AGENTHUB_PLAN_CRITIQUE") or "1").strip().lower() not in ("0", "false", "off", "no")
 _PLAN_CRITIQUE_COMPLEXITY = max(1, int(os.environ.get("AGENTHUB_PLAN_CRITIQUE_COMPLEXITY") or "4"))
@@ -131,37 +131,66 @@ async def _get_orchestrator_routing() -> tuple[str, dict[str, str], str]:
 
 
 @dataclass
-class PlannedTask:
+class SpecTask:
     id: str
     agent: str
     title: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
-    # Phase 2：EARS 风格验收标准（"当 X，系统应 Y"），供计划落盘与 reviewer/eval 对标
+    # Phase 2：EARS 风格验收标准（"当 X，系统应 Y"），供spec落盘与 reviewer/eval 对标
     acceptance: str = ""
     # #10 >1 时该任务派 N 个 cross-model attempt 并行出方案（只读），裁决择优后单点落地
     fan_out: int = 1
 
 
 @dataclass
-class TaskPlan:
+class TaskSpec:
     goal: str
-    tasks: list[PlannedTask]
+    tasks: list[SpecTask]
+    # P1：非目标 / 超出范围（Out of Scope）——显式约束 agent 探索边界，落 requirements.md
+    out_of_scope: list[str] = field(default_factory=list)
+
+
+def analyze_spec(plan: TaskSpec) -> list[str]:
+    """SDD Analyze 阶段：交叉核对 spec↔tasks 一致性，返回告警清单（空=通过）。
+
+    只读静态核对，不修改 spec；供落盘 analyze.md 与日志提示，作为执行前「spec=评测」的轻量门禁。
+    """
+    if plan is None or not plan.tasks:
+        return ["spec 为空：无任何任务"]
+    warnings: list[str] = []
+    # 1. 每个任务应有 EARS 验收，否则实现/复审无可对标基线
+    missing = [t.id for t in plan.tasks if not (t.acceptance or "").strip()]
+    if missing:
+        warnings.append(f"缺少 EARS 验收标准的任务：{', '.join(missing)}")
+    # 2. 任务标题重复（可能是冗余拆分或复制漏改）
+    seen: dict[str, int] = {}
+    for t in plan.tasks:
+        key = t.title.strip()
+        seen[key] = seen.get(key, 0) + 1
+    dups = [title for title, n in seen.items() if title and n > 1]
+    if dups:
+        warnings.append(f"任务标题重复：{', '.join(dups)}")
+    # 3. 含代码实现但无 reviewer 收尾 → 验收闭环缺口
+    agents = {t.agent for t in plan.tasks}
+    if "coder" in agents and "reviewer" not in agents:
+        warnings.append("含代码实现任务但无 reviewer 收尾：建议补审查以闭合验收")
+    return warnings
 
 
 @dataclass
 class Decision:
     """调度决策器输出：意图分流结果。
 
-    - mode=direct：Orchestrator 直接回答，answer 为答复正文，plan 为 None
-    - mode=single：派 1 个 agent 执行，plan 含单任务，不发任务计划消息
-    - mode=pipeline：多步协作，plan 含 DAG，发任务计划消息
+    - mode=direct：Orchestrator 直接回答，answer 为答复正文，spec 为 None
+    - mode=single：派 1 个 agent 执行，spec 含单任务，不发任务spec消息
+    - mode=pipeline：多步协作，spec 含 DAG，发任务spec消息
     - mode=clarify：先向用户澄清（question + options[] + recommended），不执行任务
     """
 
     mode: str
     answer: str = ""
-    plan: TaskPlan | None = None
+    spec: TaskSpec | None = None
     # mode=clarify：规划期交互澄清（Phase 1a）
     question: str = ""
     options: list[str] = field(default_factory=list)
@@ -175,7 +204,7 @@ class Decision:
 def _first_json_object(text: str) -> str | None:
     """E：扫描出第一个大括号平衡的 JSON 对象子串（正确跳过字符串内的花括号/转义）。
 
-    用于容忍 LLM 在 JSON 前后夹带说明文字（如"好的，计划如下：{...}"）。
+    用于容忍 LLM 在 JSON 前后夹带说明文字（如"好的，spec如下：{...}"）。
     """
     start = text.find("{")
     if start == -1:
@@ -225,12 +254,12 @@ def _extract_json(raw: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPlan | None:
-    """校验并构建 DAG 任务计划（依赖完整性 + 无环）。"""
+def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskSpec | None:
+    """校验并构建 DAG 任务spec（依赖完整性 + 无环）。"""
     if not goal or not isinstance(raw_tasks, list) or not raw_tasks:
         return None
 
-    tasks: list[PlannedTask] = []
+    tasks: list[SpecTask] = []
     seen_ids: set[str] = set()
     for item in raw_tasks:
         if not isinstance(item, dict):
@@ -250,7 +279,7 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
             else 1
         )
         tasks.append(
-            PlannedTask(
+            SpecTask(
                 id=tid,
                 agent=agent,
                 title=title,
@@ -272,7 +301,7 @@ def _parse_tasks(raw_tasks: object, goal: str, valid_agents: set[str]) -> TaskPl
     if not _is_dag(tasks):
         return None
 
-    return TaskPlan(goal=goal, tasks=tasks)
+    return TaskSpec(goal=goal, tasks=tasks)
 
 
 def _self_assessment(data: dict) -> tuple[float, int]:
@@ -286,6 +315,20 @@ def _self_assessment(data: dict) -> tuple[float, int]:
     except (TypeError, ValueError):
         cplx = 0
     return conf, cplx
+
+
+def _parse_str_list(raw: object, *, max_items: int = 12, max_len: int = 200) -> list[str]:
+    """解析字符串数组（容错非 list / 空项 / 超长），用于 outOfScope 等可选清单。"""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        s = " ".join(str(item).split())[:max_len]
+        if s:
+            out.append(s)
+        if len(out) >= max_items:
+            break
+    return out
 
 
 def _parse_decision(raw: str, valid_agents: set[str]) -> Decision | None:
@@ -330,10 +373,10 @@ def _parse_decision(raw: str, valid_agents: set[str]) -> Decision | None:
         title = str(data.get("title", "")).strip()
         if agent not in valid_agents or not title:
             return None
-        plan = TaskPlan(
+        plan = TaskSpec(
             goal=title,
             tasks=[
-                PlannedTask(
+                SpecTask(
                     id="t1",
                     agent=agent,
                     title=title,
@@ -342,19 +385,20 @@ def _parse_decision(raw: str, valid_agents: set[str]) -> Decision | None:
                 )
             ],
         )
-        return Decision(mode="single", plan=plan, confidence=conf, complexity=cplx)
+        return Decision(mode="single", spec=plan, confidence=conf, complexity=cplx)
 
     if mode == "pipeline":
         goal = str(data.get("goal", "")).strip()
         plan = _parse_tasks(data.get("tasks"), goal, valid_agents)
         if plan is None:
             return None
-        return Decision(mode="pipeline", plan=plan, confidence=conf, complexity=cplx)
+        plan.out_of_scope = _parse_str_list(data.get("outOfScope"))
+        return Decision(mode="pipeline", spec=plan, confidence=conf, complexity=cplx)
 
     return None
 
 
-def _is_dag(tasks: list[PlannedTask]) -> bool:
+def _is_dag(tasks: list[SpecTask]) -> bool:
     indegree = {t.id: len(t.depends_on) for t in tasks}
     children: dict[str, list[str]] = {t.id: [] for t in tasks}
     for t in tasks:
@@ -384,10 +428,10 @@ def _fallback_decision(instructions: str, valid_agents: set[str] | None = None) 
         (r for r in ("coder", "planner", "reviewer") if r in roles),
         sorted(roles)[0] if roles else "coder",
     )
-    plan = TaskPlan(
+    plan = TaskSpec(
         goal=goal,
         tasks=[
-            PlannedTask(
+            SpecTask(
                 id="t1",
                 agent=agent,
                 title=f"执行任务：{goal}",
@@ -396,7 +440,7 @@ def _fallback_decision(instructions: str, valid_agents: set[str] | None = None) 
             )
         ],
     )
-    return Decision(mode="single", plan=plan)
+    return Decision(mode="single", spec=plan)
 
 
 def _reconcile_low_confidence(decision: Decision, allow_clarify: bool) -> Decision:
@@ -412,7 +456,7 @@ def _reconcile_low_confidence(decision: Decision, allow_clarify: bool) -> Decisi
     if not (low_conf or high_cplx):
         return decision
     reason = "复杂度较高" if high_cplx else "我对直接处理的把握不足"
-    options = ["按单步直接做（快）", "拆成可评审的多步计划（稳）", "我再补充一下需求细节"]
+    options = ["按单步直接做（快）", "拆成可评审的多步spec（稳）", "我再补充一下需求细节"]
     logger.info(
         "decide 低置信纠偏：mode=%s conf=%.2f cplx=%d → clarify",
         decision.mode, decision.confidence, decision.complexity,
@@ -443,11 +487,11 @@ def compose_replan_instructions(original: str, failed: list[tuple[str, str]]) ->
 
 
 async def _critique_and_revise(
-    adapter, base_ctx, instructions: str, plan: TaskPlan, valid_agents: set[str]
-) -> TaskPlan:
-    """item 4：对高复杂度 pipeline 计划做一次"批判→修订"（复用同一 adapter/凭证，1 次 LLM 调用）。
+    adapter, base_ctx, instructions: str, plan: TaskSpec, valid_agents: set[str]
+) -> TaskSpec:
+    """item 4：对高复杂度 pipeline spec做一次"批判→修订"（复用同一 adapter/凭证，1 次 LLM 调用）。
 
-    解析失败 / 异常 / 修订非法一律保留原计划（只增不减的安全纠偏，绝不让评审拖垮规划）。
+    解析失败 / 异常 / 修订非法一律保留原spec（只增不减的安全纠偏，绝不让评审拖垮规划）。
     """
     try:
         from app.adapters.base import AdapterContext, UnifiedApprovalMode, UnifiedSandboxLevel
@@ -492,13 +536,15 @@ async def _critique_and_revise(
         )
         if revised is None:
             return plan
+        # 修订 schema 不含 outOfScope：优先沿用原 spec 的非目标，避免批判环把边界丢掉
+        revised.out_of_scope = _parse_str_list(data.get("outOfScope")) or plan.out_of_scope
         logger.info(
             "plan critique→revise: %d→%d tasks | %s",
             len(plan.tasks), len(revised.tasks), str(data.get("critique", ""))[:160],
         )
         return revised
     except Exception:
-        logger.warning("plan critique/revise 失败，保留原计划", exc_info=True)
+        logger.warning("plan critique/revise 失败，保留原spec", exc_info=True)
         return plan
 
 
@@ -585,15 +631,15 @@ async def decide(
                 if decision:
                     # item 1：低置信/高复杂的 single/direct 回退 clarify（allow_clarify 时）
                     decision = _reconcile_low_confidence(decision, allow_clarify)
-                    # item 4：高复杂 pipeline 做一次批判→修订（失败保留原计划）
+                    # item 4：高复杂 pipeline 做一次批判→修订（失败保留原spec）
                     if (
                         decision.mode == "pipeline"
-                        and decision.plan is not None
+                        and decision.spec is not None
                         and _PLAN_CRITIQUE_ON
                         and decision.complexity >= _PLAN_CRITIQUE_COMPLEXITY
                     ):
-                        decision.plan = await _critique_and_revise(
-                            adapter, ctx, instructions, decision.plan, valid_agents
+                        decision.spec = await _critique_and_revise(
+                            adapter, ctx, instructions, decision.spec, valid_agents
                         )
                     return decision
                 logger.warning(

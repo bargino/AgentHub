@@ -6,12 +6,12 @@ import { TasksPage } from '../pages/TasksPage'
 import { DiffPage } from '../pages/DiffPage'
 import { PreviewPage } from '../pages/PreviewPage'
 import { DeployPage } from '../pages/DeployPage'
-import { PlanPanel } from '../plan/PlanPanel'
+import { SpecPanel } from '../spec/SpecPanel'
 import { GitPanel } from '../git/GitPanel'
 import { PageShellEmbeddedContext } from '../pages/page-shell-context'
 import { RIGHT_DOCK_TABS } from './right-dock-tabs'
 
-/** 会话右侧工作区：概览 / 任务 / Diff / 预览 / 部署（+ 计划 / Git）单实例 + tab 切换；
+/** 会话右侧工作区：概览 / 任务 / Diff / 预览 / 部署（+ spec / Git）单实例 + tab 切换；
  *  支持展开接管中间区（A2）。任务/Diff/预览/部署 复用完整页面（嵌入态去重会话头）。 */
 export function RightDock(): React.JSX.Element | null {
   const tr = useT()
@@ -96,7 +96,7 @@ export function RightDock(): React.JSX.Element | null {
         </div>
       </div>
 
-      {/* 内容体：完整页面以嵌入态渲染（去掉重复会话头），概览/计划/Git 为独立面板 */}
+      {/* 内容体：完整页面以嵌入态渲染（去掉重复会话头），概览/spec/Git 为独立面板 */}
       <div className="flex-1 min-h-0 flex flex-col">
         <PageShellEmbeddedContext.Provider value={true}>
           {rightTab === 'overview' && <ConversationOverview />}
@@ -104,7 +104,7 @@ export function RightDock(): React.JSX.Element | null {
           {rightTab === 'review' && <DiffPage />}
           {rightTab === 'preview' && <PreviewPage />}
           {rightTab === 'deploy' && <DeployPage />}
-          {rightTab === 'plan' && <PlanPanel />}
+          {rightTab === 'spec' && <SpecPanel />}
           {rightTab === 'git' && <GitPanel />}
         </PageShellEmbeddedContext.Provider>
       </div>

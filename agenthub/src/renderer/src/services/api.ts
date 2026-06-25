@@ -9,7 +9,8 @@ import type {
   Approval,
   Deployment,
   ProviderConfigMap,
-  ProviderScan
+  ProviderScan,
+  ProviderProfile
 } from '../types'
 
 // 后端 DTO 与前端 types 仅在时间字段上有差异：ConversationOut.lastTime 与
@@ -103,23 +104,23 @@ export async function stopConversation(conversationId: string): Promise<{ stoppe
   return postJson<{ stopped: boolean }>(`/conversations/${conversationId}/stop`)
 }
 
-/** 计划确认门禁（Phase 1b）：批准/拒绝待执行的 pipeline 任务计划 */
-export async function confirmPlan(
+/** spec 确认门禁（Phase 1b）：批准/拒绝待执行的 pipeline 任务 spec */
+export async function confirmSpec(
   conversationId: string,
   approved: boolean
 ): Promise<{ ok: boolean; approved: boolean }> {
   return postJson<{ ok: boolean; approved: boolean }>(
-    `/conversations/${conversationId}/plan/confirm`,
+    `/conversations/${conversationId}/spec/confirm`,
     { approved }
   )
 }
 
-/** 计划修改门禁（A）：提交修改意见，后端取消旧计划并据此重新规划 */
-export async function revisePlan(
+/** spec 修改门禁（A）：提交修改意见，后端取消旧 spec 并据此重新规划 */
+export async function reviseSpec(
   conversationId: string,
   feedback: string
 ): Promise<{ ok: boolean }> {
-  return postJson<{ ok: boolean }>(`/conversations/${conversationId}/plan/revise`, { feedback })
+  return postJson<{ ok: boolean }>(`/conversations/${conversationId}/spec/revise`, { feedback })
 }
 
 export async function rollbackConversation(
@@ -131,37 +132,37 @@ export async function rollbackConversation(
   })
 }
 
-// ---- 计划（spec-driven · Spec Kit 三件套 + 合并版，item 2）----
-export interface PlanFile {
+// ---- spec（spec-driven · Spec Kit 三件套 + 合并版，item 2）----
+export interface SpecFile {
   name: string
   path: string
   size: number
   mtime: string
 }
 
-/** 列出该会话的计划文件（无 workspace 时返回 []） */
-export async function listPlans(conversationId: string): Promise<PlanFile[]> {
-  return getJson<PlanFile[]>(`/conversations/${conversationId}/plans`)
+/** 列出该会话的 spec 文件（无 workspace 时返回 []） */
+export async function listSpecs(conversationId: string): Promise<SpecFile[]> {
+  return getJson<SpecFile[]>(`/conversations/${conversationId}/specs`)
 }
 
-/** 读取单个计划文件内容（路径限定在 plans 根内） */
-export async function getPlanFile(
+/** 读取单个 spec 文件内容（路径限定在 specs 根内） */
+export async function getSpecFile(
   conversationId: string,
   path: string
 ): Promise<{ path: string; content: string }> {
   const params = new URLSearchParams({ path })
   return getJson<{ path: string; content: string }>(
-    `/conversations/${conversationId}/plans/file?${params.toString()}`
+    `/conversations/${conversationId}/specs/file?${params.toString()}`
   )
 }
 
-/** 保存单个计划文件（文件级逐条编辑落盘） */
-export async function savePlanFile(
+/** 保存单个 spec 文件（文件级逐条编辑落盘） */
+export async function saveSpecFile(
   conversationId: string,
   path: string,
   content: string
 ): Promise<{ ok: boolean; path: string }> {
-  return patchJson<{ ok: boolean; path: string }>(`/conversations/${conversationId}/plans/file`, {
+  return patchJson<{ ok: boolean; path: string }>(`/conversations/${conversationId}/specs/file`, {
     path,
     content
   })
@@ -368,4 +369,53 @@ export async function updateAgent(
 /** 扫描本地 codex / claude-code 配置，供「默认」供应商模式回显检测到的供应商。 */
 export async function scanProvider(adapter: string): Promise<ProviderScan> {
   return getJson<ProviderScan>(`/agents/provider-scan?adapter=${encodeURIComponent(adapter)}`)
+}
+
+// ---- Provider Profiles（命名供应商档案，参照 cc-switch）----
+export async function getProviderProfiles(): Promise<ProviderProfile[]> {
+  return getJson<ProviderProfile[]>('/provider-profiles')
+}
+
+export async function createProviderProfile(data: {
+  tool: string
+  name: string
+  config: Record<string, string>
+}): Promise<ProviderProfile> {
+  return postJson<ProviderProfile>('/provider-profiles', data)
+}
+
+export async function updateProviderProfile(
+  profileId: string,
+  data: { name?: string; config?: Record<string, string>; sortOrder?: number }
+): Promise<ProviderProfile> {
+  return patchJson<ProviderProfile>(`/provider-profiles/${profileId}`, data)
+}
+
+export async function deleteProviderProfile(profileId: string): Promise<void> {
+  await deleteJson(`/provider-profiles/${profileId}`)
+}
+
+/** 按 base_url + API Key 拉取供应商可用模型（参照 cc-switch fetch models）。 */
+export async function fetchProviderModels(data: {
+  tool: string
+  baseUrl: string
+  authToken: string
+}): Promise<string[]> {
+  const res = await postJson<{ models: string[] }>('/provider-profiles/fetch-models', data)
+  return res.models
+}
+
+export interface EndpointSpeedResult {
+  url: string
+  ok: boolean
+  ms: number
+  status: number
+}
+
+/** 对一组请求地址做可达性/延迟测速（参照 cc-switch EndpointSpeedTest）。 */
+export async function speedTestEndpoints(urls: string[]): Promise<EndpointSpeedResult[]> {
+  const res = await postJson<{ results: EndpointSpeedResult[] }>('/provider-profiles/speed-test', {
+    urls
+  })
+  return res.results
 }

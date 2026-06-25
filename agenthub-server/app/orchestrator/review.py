@@ -14,7 +14,7 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.orchestrator.task_planner import PlannedTask, TaskPlan
+    from app.orchestrator.task_planner import SpecTask, TaskSpec
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,8 @@ def compose_fix_instructions(original: str, issues: list[str]) -> str:
     )
 
 
-def last_reviewer_task(plan: "TaskPlan") -> "PlannedTask | None":
-    """返回计划中最后一个 reviewer 任务（回环以它的裁决为准）；无则 None。"""
+def last_reviewer_task(plan: "TaskSpec") -> "SpecTask | None":
+    """返回spec中最后一个 reviewer 任务（回环以它的裁决为准）；无则 None。"""
     for task in reversed(plan.tasks):
         if task.agent == "reviewer":
             return task

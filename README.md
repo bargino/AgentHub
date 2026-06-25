@@ -40,7 +40,7 @@
 | 🔀 **意图分流** | `direct / single / pipeline` 三级分流，一次大模型调用完成「判意图 + 简单问题直接作答」，简单请求调用次数约 **−75%**，判断失败回退单步执行。 |
 | 🕸️ **任务编排（DAG）** | 复杂需求拆为带依赖的任务图；提交前校验依赖合法且无环，执行期按依赖分批调度、无依赖并行、失败级联取消、已完成断点续跑，死锁态兜底。 |
 | 🧠 **三层记忆** | 短期（会话）/ 中期（任务间结果）/ 长期（跨会话项目知识）；按真实 token 占用比例分级动态调节注入预算，历史超窗滚动压缩为结构化摘要。 |
-| 📋 **计划文档（plan docs）** | 复杂 pipeline 自动把任务计划落盘为可评审 Markdown（需求 / 设计 / 任务三件套，借鉴 Spec Kit），可在右侧「计划」面板逐文件查看与编辑。 |
+| 📋 **spec 文档（spec docs）** | 复杂 pipeline 自动把任务 spec 落盘为可评审 Markdown（需求 / 设计 / 任务三件套，借鉴 Spec Kit），可在右侧「spec」面板逐文件查看与编辑。 |
 | 🔌 **统一适配器** | 统一执行接口 + 统一事件流（思考 / 工具调用 / 审批 / 代码改动 / 完成 / 错误）；按健康检查在 Claude → Codex 间自动选择，支持 per-agent 独立供应商与会话 resume。 |
 | 🧭 **结构化能力路由** | 借鉴 A2A *Agent Card*，Agent 能力可声明为结构化清单（何时该派 / 不该派 / 输入输出 / 示例），渲染进规划提示，路由更准；未声明时回退自由文本，向后兼容。 |
 | 🛡️ **审批与安全闸门** | 审批协调器打通「界面审批」与「Agent 执行阻塞点」并持久化，重启后仍可解除、失败置任务 failed 并提示；高危操作经命令白名单 + 权限策略推导风险等级并二次确认，路径围栏防越权写。 |
@@ -203,12 +203,12 @@ npm run build:linux  # Linux AppImage / snap / deb
    - `direct`：闲聊 / 简单问答，Orchestrator 一次直接作答，不派下游任务；
    - `single`：派 1 个角色 Agent 执行；
    - `pipeline`：拆成带依赖的任务 DAG，多角色协作完成。
-3. **计划文档**：`pipeline` 模式会把任务计划落盘为可评审 Markdown（需求 / 设计 / 任务三件套），点右侧 **「计划」** 面板可逐文件查看 / 编辑；改完用「修改计划」反馈给规划层重新拆解。
+3. **spec 文档**：`pipeline` 模式会把任务 spec 落盘为可评审 Markdown（需求 / 设计 / 任务三件套），点右侧 **「spec」** 面板可逐文件查看 / 编辑；改完用「修改 spec」反馈给规划层重新拆解。
 4. **定向与命令**：
    - `@<角色>`：把消息直达指定角色（如 `@coder 改这里`、`@reviewer 审查`）；
-   - `/plan` 出计划、`/tasks` 看进度等斜杠命令。
+   - `/spec` 出 spec、`/tasks` 看进度等斜杠命令。
 5. **审查与审批**：代码改动以**流式 Diff**呈现（并排 / 行内、语法高亮）；高危操作（如部署）走**向导式逐项审批**，确认后才执行。
-6. **右侧面板**：审查（review）/ 任务（task）/ 计划（plan）/ Git / 预览（preview）随任务进展切换。
+6. **右侧面板**：审查（review）/ 任务（task）/ spec / Git / 预览（preview）随任务进展切换。
 
 ---
 
@@ -271,7 +271,7 @@ npm run build:linux  # Linux AppImage / snap / deb
 - 全局规则：`~/.agenthub/rules.md`
 - 工作区规则 / 宪法：`{workspace}/AGENTHUB.md`
 - 跨会话进展：`{workspace}/.agenthub/progress.md`
-- 计划文档落盘目录：`{workspace}/.agenthub/plans/`
+- spec 文档落盘目录：`{workspace}/.agenthub/plans/`
 
 ---
 
@@ -315,5 +315,5 @@ npm run build:linux  # Linux AppImage / snap / deb
 - [Claude Agent SDK](https://docs.anthropic.com/) · [OpenAI Codex SDK](https://openai.com/) — 底层编码 Agent 能力
 - [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) — 统一工具接入
 - [A2A / Agent2Agent](https://github.com/google/A2A) — 结构化能力描述（Agent Card）思想来源
-- [GitHub Spec Kit](https://github.com/github/spec-kit) — 计划文档「需求 / 设计 / 任务」三件套形态参考
+- [GitHub Spec Kit](https://github.com/github/spec-kit) — spec 文档「需求 / 设计 / 任务」三件套形态参考
 - [electron-vite](https://electron-vite.org/) · [FastAPI](https://fastapi.tiangolo.com/) · [SQLAlchemy](https://www.sqlalchemy.org/)

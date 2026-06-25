@@ -46,7 +46,7 @@ function segmentSteps(steps: Message[]): TraceSeg[] {
  *  - 头部：头像 + 角色名 + 时间（仅一次）
  *  - 「执行过程」折叠区：按真实发生顺序的步骤（思考 / 工具调用+结果 / 中间输出），不按类型合并
  *  - 代码修改块：本次任务的 Diff 文件增删行数（对标 Cursor/Windsurf），始终可见、点击进入审查
- *  - 主体：最终答案 Markdown，复用 MessageBubble(grouped) 保留复制/引用/澄清/计划确认/流式
+ *  - 主体：最终答案 Markdown，复用 MessageBubble(grouped) 保留复制/引用/澄清/spec 确认/流式
  *  执行中自动展开过程、完成后保持展开（用户手动开合优先；历史 turn 初始收起）；
  *  过程内相邻工具聚为可整体折叠的组，单工具/工具组结束后各自收起。 */
 export function AgentTurnCard({

@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { Copy, Check, Quote, Undo2, Pencil, RotateCcw } from 'lucide-react'
 import type { Message, AgentRole } from '../../types'
 import { useAppStore } from '../../store'
-import { confirmPlan, revisePlan } from '../../services/api'
+import { confirmSpec, reviseSpec } from '../../services/api'
 import { Avatar } from '../ui/Avatar'
 import { Tooltip } from '../ui/Tooltip'
 import { getRoleColor, getRoleLabel } from '../ui/role'
@@ -203,8 +203,8 @@ function ClarifyOptions({
   )
 }
 
-/** 计划确认门禁（Phase 1b + A）：批准→执行；取消→放弃；修改计划→提交意见后端重规划 */
-function PlanConfirm({
+/** spec 确认门禁（Phase 1b + A）：批准→执行；取消→放弃；修改 spec→提交意见后端重规划 */
+function SpecConfirm({
   conversationId,
   taskCount
 }: {
@@ -219,12 +219,12 @@ function PlanConfirm({
   const confirm = (approved: boolean): void => {
     if (done !== null) return
     setDone(approved ? 'approved' : 'cancelled')
-    void confirmPlan(conversationId, approved)
+    void confirmSpec(conversationId, approved)
   }
   const submitRevise = (): void => {
     if (done !== null || !feedback.trim()) return
     setDone('revised')
-    void revisePlan(conversationId, feedback.trim())
+    void reviseSpec(conversationId, feedback.trim())
   }
 
   if (done !== null) {
@@ -233,7 +233,7 @@ function PlanConfirm({
         ? '✓ 已批准，开始执行'
         : done === 'revised'
           ? '已提交修改，正在重新规划…'
-          : '已取消该计划'
+          : '已取消该 spec'
     return (
       <div className="mt-2 text-[12px]" style={{ color: 'var(--color-text-tertiary)' }}>
         {txt}
@@ -247,7 +247,7 @@ function PlanConfirm({
         <textarea
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
-          placeholder="说明要怎么改这个计划（比如：去掉测试任务、换技术栈、调整顺序…）"
+          placeholder="说明要怎么改这个 spec（比如：去掉测试任务、换技术栈、调整顺序…）"
           rows={2}
           className="text-[12px] px-2 py-1.5 rounded-md"
           style={{
@@ -309,7 +309,7 @@ function PlanConfirm({
           color: 'var(--color-text-secondary)'
         }}
       >
-        修改计划
+        修改 spec
       </button>
       <button
         onClick={() => confirm(false)}
@@ -465,11 +465,11 @@ export function MessageBubble({
               recommended={msg.meta.clarify.recommended}
             />
           )}
-          {!msg.streaming && msg.meta?.planConfirm && (
-            <PlanConfirm
+          {!msg.streaming && msg.meta?.specConfirm && (
+            <SpecConfirm
               conversationId={msg.conversationId}
-              goal={msg.meta.planConfirm.goal}
-              taskCount={msg.meta.planConfirm.taskCount}
+              goal={msg.meta.specConfirm.goal}
+              taskCount={msg.meta.specConfirm.taskCount}
             />
           )}
           {msg.streaming && <span className="stream-cursor" />}

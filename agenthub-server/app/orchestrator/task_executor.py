@@ -39,7 +39,7 @@ from app.orchestrator.review import (
     review_verdict_degraded,
     strip_verdict_marker,
 )
-from app.orchestrator.task_planner import PlannedTask, TaskPlan
+from app.orchestrator.task_planner import SpecTask, TaskSpec
 from app.schemas import WSEvent
 from app.security.approval_manager import get_approval_coordinator
 from app.security.permission_manager import ActionType, check_permission
@@ -169,7 +169,7 @@ async def _publish_delta(
 class TaskRunner:
     """单任务执行：路由适配器 -> 构建上下文 -> 消费事件流 -> 业务域转换。"""
 
-    def __init__(self, state: ExecutionState, planned: PlannedTask, role_labels: dict[str, str] | None = None):
+    def __init__(self, state: ExecutionState, planned: SpecTask, role_labels: dict[str, str] | None = None):
         self.state = state
         self.planned = planned
         self.db_task_id = state.id_map[planned.id]
@@ -791,7 +791,7 @@ async def _resolve_diverse_adapters(registry, n: int) -> list[tuple[Any, str, An
 
 async def _run_proposal_attempt(
     state: ExecutionState,
-    planned: PlannedTask,
+    planned: SpecTask,
     attempt_idx: int,
     adapter: Any,
     adapter_name: str,
@@ -860,7 +860,7 @@ async def _run_proposal_attempt(
 
 async def _run_selection(
     state: ExecutionState,
-    planned: PlannedTask,
+    planned: SpecTask,
     proposals: list[dict],
     judge_adapter: tuple[Any, str, Any],
 ) -> tuple[int, str]:
@@ -901,7 +901,7 @@ async def _run_selection(
 
 
 async def _execute_ready_task(
-    state: ExecutionState, planned: PlannedTask, role_labels: dict[str, str]
+    state: ExecutionState, planned: SpecTask, role_labels: dict[str, str]
 ) -> bool:
     """执行单个就绪任务。
 
@@ -981,7 +981,7 @@ async def _execute_ready_task(
     return await TaskRunner(landing_state, planned, role_labels).run()
 
 
-async def execute_plan(state: ExecutionState, plan: TaskPlan) -> tuple[int, int]:
+async def execute_plan(state: ExecutionState, plan: TaskSpec) -> tuple[int, int]:
     """拓扑调度：就绪任务并行执行；依赖失败的任务级联取消。
 
     返回 (成功数, 失败/取消数)。
@@ -999,7 +999,7 @@ async def execute_plan(state: ExecutionState, plan: TaskPlan) -> tuple[int, int]
             existing = await task_service.get_task(session, db_id)
             if existing and existing.status == "success":
                 completed.add(planned.id)
-    pending: dict[str, PlannedTask] = {
+    pending: dict[str, SpecTask] = {
         t.id: t for t in plan.tasks if t.id not in completed
     }
     failed: set[str] = set()

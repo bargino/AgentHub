@@ -1,4 +1,4 @@
-"""orchestrator.engine 单测：意图快路径 + 计划确认门禁 TTL（_take_pending / _sweep）。
+"""orchestrator.engine 单测：意图快路径 + spec确认门禁 TTL（_take_pending / _sweep）。
 
 _fast_path_decision 为纯函数；_take_pending / _sweep_expired_pending 涉及内存暂存 +
 DB 取消，复用临时文件 SQLite。被测核心 = engine 自身逻辑，不 mock。
@@ -18,7 +18,7 @@ from app.orchestrator.engine import (
     _take_pending,
 )
 from app.orchestrator.task_executor import ExecutionState
-from app.orchestrator.task_planner import PlannedTask, TaskPlan
+from app.orchestrator.task_planner import SpecTask, TaskSpec
 from app.services import task as task_service
 
 _CID = "conv-eng"
@@ -40,13 +40,13 @@ async def db(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _clear_pending():
     """隔离内存暂存全局态，避免跨用例泄漏。"""
-    eng._PENDING_PLANS.clear()
+    eng._PENDING_SPECS.clear()
     yield
-    eng._PENDING_PLANS.clear()
+    eng._PENDING_SPECS.clear()
 
 
-async def _seed_one(title: str = "x") -> tuple[TaskPlan, dict[str, str]]:
-    plan = TaskPlan(goal="g", tasks=[PlannedTask(id="t1", agent="coder", title=title)])
+async def _seed_one(title: str = "x") -> tuple[TaskSpec, dict[str, str]]:
+    plan = TaskSpec(goal="g", tasks=[SpecTask(id="t1", agent="coder", title=title)])
     factory = get_session_factory()
     async with factory() as session, session.begin():
         outs = await task_service.create_tasks(
@@ -104,13 +104,13 @@ def test_fast_path_non_greeting_returns_none(text: str) -> None:
 
 def test_sweep_removes_expired_keeps_fresh() -> None:
     now = time.monotonic()
-    eng._PENDING_PLANS["fresh"] = (None, None, None, now)  # type: ignore[assignment]
-    eng._PENDING_PLANS["stale"] = (None, None, None, now - eng._PENDING_TTL_S - 100)  # type: ignore[assignment]
+    eng._PENDING_SPECS["fresh"] = (None, None, None, now)  # type: ignore[assignment]
+    eng._PENDING_SPECS["stale"] = (None, None, None, now - eng._PENDING_TTL_S - 100)  # type: ignore[assignment]
 
     _sweep_expired_pending()
 
-    assert "fresh" in eng._PENDING_PLANS
-    assert "stale" not in eng._PENDING_PLANS
+    assert "fresh" in eng._PENDING_SPECS
+    assert "stale" not in eng._PENDING_SPECS
 
 
 # ---- _take_pending：内存 TTL 有效 / 过期取消 / 无暂存重建 ----
@@ -119,7 +119,7 @@ def test_sweep_removes_expired_keeps_fresh() -> None:
 async def test_take_pending_fresh_returns_entry(db) -> None:
     plan, id_map = await _seed_one()
     state = _state(id_map)
-    eng._PENDING_PLANS[_CID] = (state, plan, "standard", time.monotonic())
+    eng._PENDING_SPECS[_CID] = (state, plan, "standard", time.monotonic())
 
     taken = await _take_pending(get_session_factory(), _CID)
 
@@ -128,7 +128,7 @@ async def test_take_pending_fresh_returns_entry(db) -> None:
     assert rstate is state
     assert rplan is plan
     assert rci == "standard"
-    assert _CID not in eng._PENDING_PLANS  # 取出即弹出
+    assert _CID not in eng._PENDING_SPECS  # 取出即弹出
     assert await _status(id_map["t1"]) == "pending"  # 有效期内不取消任务
 
 
@@ -136,12 +136,12 @@ async def test_take_pending_expired_cancels_and_returns_none(db) -> None:
     plan, id_map = await _seed_one()
     state = _state(id_map)
     expired_at = time.monotonic() - eng._PENDING_TTL_S - 100
-    eng._PENDING_PLANS[_CID] = (state, plan, None, expired_at)
+    eng._PENDING_SPECS[_CID] = (state, plan, None, expired_at)
 
     taken = await _take_pending(get_session_factory(), _CID)
 
     assert taken is None
-    assert _CID not in eng._PENDING_PLANS
+    assert _CID not in eng._PENDING_SPECS
     assert await _status(id_map["t1"]) == "cancelled"  # 过期视为失效并取消其任务
 
 

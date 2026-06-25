@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.base import AdapterContext, UnifiedApprovalMode, UnifiedSandboxLevel
 from app.config import resolve_mcp_servers
 from app.db.engine import get_data_dir
-from app.db.models import AgentRecord
+from app.db.models import AgentRecord, ProviderProfileRecord
 from app.memory import conversation_memory, project_memory, summary, task_memory, token_meter
 from app.orchestrator import context_meter
 from app.orchestrator.prompts import (
@@ -20,10 +20,14 @@ from app.orchestrator.prompts import (
     REVIEWER_USER_TEMPLATE,
     get_role_system_prompt,
 )
-from app.orchestrator.task_planner import PlannedTask
+from app.orchestrator.task_planner import SpecTask
 from app.services import agent_session as agent_session_service
 from app.services import message as message_service
-from app.services.provider import resolve_model, resolve_provider
+from app.services.provider import (
+    normalize_provider_config,
+    profile_model,
+    profile_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +176,7 @@ async def _get_agent_record(
 
 
 async def _collect_acceptance_text(session: AsyncSession, conversation_id: str) -> str:
-    """汇总本会话各任务的 EARS 验收标准为复审核对清单（Phase 3：计划=评测）。
+    """汇总本会话各任务的 EARS 验收标准为复审核对清单（Phase 3：spec=评测）。
 
     无显式验收标准时回退「按原始需求审查」，不强制 reviewer 编造标准。
     """
@@ -186,7 +190,7 @@ async def _collect_acceptance_text(session: AsyncSession, conversation_id: str) 
         )
     ).all()
     if not rows:
-        return "（本计划未给出显式验收标准，按原始需求审查）"
+        return "（本spec未给出显式验收标准，按原始需求审查）"
     return "\n".join(f"- {title}：{acc}" for title, acc in rows)
 
 
@@ -196,7 +200,7 @@ async def build_context(
     conversation_id: str,
     project_name: str,
     workspace_path: str,
-    task: PlannedTask,
+    task: SpecTask,
     user_instructions: str,
     upstream_results: dict[str, str],
     member_ids: list[str] | None = None,
@@ -348,24 +352,24 @@ async def build_context(
         task.agent, record.capabilities if record else None
     )
 
-    # Agent 注册的专属模型与供应商配置（空值不传，回退本地 SDK 登录态/默认模型）；
-    # model 与 provider 都按「实际运行的适配器 + default/custom 模式」从对应适配器槽解析，
-    # 二者绑定（避免切适配器后用到供应商不存在的模型）。default 不注入凭据（走本地登录态）。
+    # Agent 供应商配置仅两种模式（与前端对齐）：
+    # - profile：base_url/auth_token/model 全部来自所引用的命名档案；
+    # - default（含历史 custom 一并归并）：不注入任何凭据/模型，全部走本地 CLI 登录态与配置。
     model: str | None = None
     provider: dict[str, str] | None = None
     if record:
         eff_adapter = adapter_name or record.adapter_type
-        model = resolve_model(
-            record.provider_config,
-            eff_adapter,
-            legacy_adapter=record.adapter_type,
-            legacy_model=record.model,
+        pc = normalize_provider_config(
+            record.provider_config, legacy_adapter=record.adapter_type, legacy_model=record.model
         )
-        provider = resolve_provider(
-            record.provider_config,
-            eff_adapter,
-            legacy_adapter=record.adapter_type,
-        )
+        entry = pc.get(eff_adapter) or {}
+        if entry.get("mode") == "profile" and entry.get("profile_id"):
+            prof = await session.get(ProviderProfileRecord, entry["profile_id"])
+            # 档案工具须与运行适配器一致，否则忽略（走本地登录态）
+            if prof is not None and prof.tool == eff_adapter:
+                provider = profile_provider(prof.tool, prof.config)
+                model = profile_model(prof.config)
+        # 非 profile = 默认/本地：provider 与 model 均保持 None，由本地配置接管
 
     # per-agent MCP：capabilities.mcp_servers 为允许的 server 名清单时按其过滤全局；
     # 未声明（无该键）则 None —— adapter 回退全局全集，向后兼容

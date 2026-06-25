@@ -2,17 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { FileText, RefreshCw, Save, Loader2, ChevronLeft, Check, Eye, Pencil } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useT } from '../../i18n'
-import { listPlans, getPlanFile, savePlanFile, type PlanFile } from '../../services/api'
+import { listSpecs, getSpecFile, saveSpecFile, type SpecFile } from '../../services/api'
 import { MarkdownBody } from '../chat/MessageBubble'
 
-/** 计划查看/编辑面板（item 2）：列出 spec-driven 三件套 + 合并版，支持逐文件查看与编辑落盘。 */
-export function PlanPanel(): React.JSX.Element {
+/** spec 文档查看/编辑面板（item 2）：列出 spec-driven 三件套 + 合并版，支持逐文件查看与编辑落盘。 */
+export function SpecPanel(): React.JSX.Element {
   const tr = useT()
   const activeId = useAppStore((s) => s.activeConversationId)
 
-  const [files, setFiles] = useState<PlanFile[]>([])
+  const [files, setFiles] = useState<SpecFile[]>([])
   const [listLoading, setListLoading] = useState(false)
-  const [selected, setSelected] = useState<PlanFile | null>(null)
+  const [selected, setSelected] = useState<SpecFile | null>(null)
   const [content, setContent] = useState('')
   const [dirty, setDirty] = useState(false)
   const [fileLoading, setFileLoading] = useState(false)
@@ -23,7 +23,7 @@ export function PlanPanel(): React.JSX.Element {
     if (!activeId) return
     setListLoading(true)
     try {
-      setFiles(await listPlans(activeId))
+      setFiles(await listSpecs(activeId))
     } catch {
       setFiles([])
     } finally {
@@ -39,14 +39,14 @@ export function PlanPanel(): React.JSX.Element {
     void loadList()
   }, [loadList])
 
-  const openFile = async (f: PlanFile): Promise<void> => {
+  const openFile = async (f: SpecFile): Promise<void> => {
     setSelected(f)
     setFileLoading(true)
     setSaveState('idle')
     setDirty(false)
     setMode('preview')
     try {
-      const r = await getPlanFile(activeId as string, f.path)
+      const r = await getSpecFile(activeId as string, f.path)
       setContent(r.content)
     } catch {
       setContent('')
@@ -59,7 +59,7 @@ export function PlanPanel(): React.JSX.Element {
     if (!activeId || !selected || saveState === 'saving') return
     setSaveState('saving')
     try {
-      await savePlanFile(activeId, selected.path, content)
+      await saveSpecFile(activeId, selected.path, content)
       setSaveState('saved')
       setDirty(false)
       setTimeout(() => setSaveState('idle'), 2000)
@@ -75,12 +75,12 @@ export function PlanPanel(): React.JSX.Element {
         className="flex items-center justify-center h-full text-sm"
         style={{ color: 'var(--color-text-secondary)' }}
       >
-        {tr('plan.noConversation')}
+        {tr('spec.noConversation')}
       </div>
     )
   }
 
-  // 详情视图：查看 / 编辑单个计划文件
+  // 详情视图：查看 / 编辑单个 spec 文件
   if (selected) {
     return (
       <div
@@ -110,10 +110,10 @@ export function PlanPanel(): React.JSX.Element {
             onClick={() => setMode((m) => (m === 'preview' ? 'edit' : 'preview'))}
             className="btn-ghost flex items-center gap-1 px-2 h-7 rounded-md text-xs shrink-0"
             style={{ color: 'var(--color-text-secondary)' }}
-            title={mode === 'preview' ? tr('plan.edit') : tr('plan.preview')}
+            title={mode === 'preview' ? tr('spec.edit') : tr('spec.preview')}
           >
             {mode === 'preview' ? <Pencil size={13} /> : <Eye size={13} />}
-            <span>{mode === 'preview' ? tr('plan.edit') : tr('plan.preview')}</span>
+            <span>{mode === 'preview' ? tr('spec.edit') : tr('spec.preview')}</span>
           </button>
           <button
             onClick={handleSave}
@@ -135,10 +135,10 @@ export function PlanPanel(): React.JSX.Element {
             )}
             <span>
               {saveState === 'saved'
-                ? tr('plan.saved')
+                ? tr('spec.saved')
                 : saveState === 'error'
-                  ? tr('plan.saveFailed')
-                  : tr('plan.save')}
+                  ? tr('spec.saveFailed')
+                  : tr('spec.save')}
             </span>
           </button>
         </div>
@@ -181,7 +181,7 @@ export function PlanPanel(): React.JSX.Element {
     )
   }
 
-  // 列表视图：会话下全部计划文件
+  // 列表视图：会话下全部 spec 文件
   return (
     <div
       className="flex flex-col h-full min-h-0"
@@ -192,7 +192,7 @@ export function PlanPanel(): React.JSX.Element {
         style={{ padding: '10px 16px', borderBottom: '1px solid var(--color-border-light)' }}
       >
         <span className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>
-          {tr('rightDock.plan')}
+          {tr('rightDock.spec')}
         </span>
         <span className="text-xs tabular-nums" style={{ color: 'var(--color-text-tertiary)' }}>
           {files.length}
@@ -201,7 +201,7 @@ export function PlanPanel(): React.JSX.Element {
           onClick={() => void loadList()}
           className="btn-ghost flex items-center justify-center rounded-md ml-auto"
           style={{ width: 26, height: 26, color: 'var(--color-text-tertiary)' }}
-          title={tr('plan.refresh')}
+          title={tr('spec.refresh')}
         >
           <RefreshCw size={13} className={listLoading ? 'animate-spin' : undefined} />
         </button>
@@ -214,7 +214,7 @@ export function PlanPanel(): React.JSX.Element {
             style={{ color: 'var(--color-text-secondary)', paddingTop: 56, paddingBottom: 56 }}
           >
             <FileText size={24} style={{ color: 'var(--color-text-tertiary)', opacity: 0.6 }} />
-            <span>{tr('plan.empty')}</span>
+            <span>{tr('spec.empty')}</span>
           </div>
         ) : (
           files.map((f) => (

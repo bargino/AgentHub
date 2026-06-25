@@ -147,8 +147,8 @@ export function MessageInput(): React.JSX.Element {
     if (roles.has('planner'))
       items.push({
         kind: 'command',
-        cmd: '/plan',
-        desc: tFn('chat.input.cmd.plan'),
+        cmd: '/spec',
+        desc: tFn('chat.input.cmd.spec'),
         icon: <Map size={15} />,
         action: { type: 'prefix', role: 'planner' }
       })

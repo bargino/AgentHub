@@ -8,6 +8,7 @@ export const en: Dict = {
     create: 'Create',
     confirm: 'Confirm',
     delete: 'Delete',
+    edit: 'Edit',
     close: 'Close',
     back: 'Back',
     colon: ': ',
@@ -32,8 +33,73 @@ export const en: Dict = {
     preview: 'Preview',
     deploy: 'Deploy',
     agents: 'Agents',
+    providers: 'Providers',
     manage: 'Management',
     settings: 'Settings'
+  },
+  providers: {
+    page: {
+      title: 'Provider Configuration',
+      subtitle: 'Manage named provider profiles for Claude Code / Codex (à la cc-switch), referenced by agents',
+      add: 'New profile',
+      loading: 'Loading provider profiles…',
+      loadErrorTitle: 'Failed to load',
+      loadErrorDesc: 'Could not fetch provider profiles; ensure the engine is ready and retry',
+      retry: 'Retry',
+      emptyTitle: 'No profiles',
+      emptyDesc: 'Click "New profile", or duplicate a built-in preset to start'
+    },
+    form: {
+      preset: 'From preset',
+      presetHint: 'Pick a provider template to prefill (migrated from cc-switch), then enter your API Key',
+      presetSelect: 'Select a preset template…',
+      presetSearch: 'Search presets…',
+      presetNoResult: 'No matching presets',
+      name: 'Profile name',
+      namePlaceholder: 'e.g. DeepSeek-Prod, GLM-Personal',
+      baseUrlHint: 'Leave blank to use the local login of this tool',
+      model: 'Model',
+      modelPlaceholder: 'Leave blank to use the SDK default model',
+      wireApi: 'Wire API',
+      wireApiHint: 'Third-party usually chat; official/compatible use responses',
+      reasoning: 'Reasoning effort',
+      reasoningHint: 'codex model_reasoning_effort',
+      reasoningDefault: 'Default',
+      getApiKey: 'Get API Key',
+      fetchModels: 'Fetch models',
+      fetching: 'Fetching…',
+      speedTest: 'Speed test',
+      testing: 'Testing…',
+      unreachable: 'Unreachable'
+    },
+    category: {
+      official: 'Official',
+      cn_official: 'Domestic',
+      aggregator: 'Aggregator',
+      custom: 'Custom'
+    },
+    modal: {
+      addTitle: 'New {tool} provider profile',
+      editTitle: 'Edit {tool} provider profile'
+    },
+    card: {
+      preset: 'Preset',
+      localLogin: 'Local login',
+      none: 'Not set',
+      duplicate: 'Duplicate',
+      copySuffix: 'copy',
+      confirmDelete: 'Confirm delete'
+    },
+    notify: {
+      saveFailed: 'Save failed',
+      loadFailed: 'Load failed',
+      deleteFailed: 'Delete failed',
+      retry: 'Please retry later',
+      needBaseUrl: 'Please fill in Base URL first',
+      modelsFetched: 'Fetched {count} models',
+      fetchModelsFailed: 'Failed to fetch models',
+      speedTestFailed: 'Speed test failed'
+    }
   },
   header: {
     invite: 'Invite members',
@@ -170,13 +236,13 @@ export const en: Dict = {
   rightDock: {
     review: 'Review',
     task: 'Tasks',
-    plan: 'Plans',
+    spec: 'Specs',
     git: 'Git',
     preview: 'Preview'
   },
-  plan: {
-    noConversation: 'Pick a session to view its plans',
-    empty: 'No plans yet (generated for multi-step pipelines)',
+  spec: {
+    noConversation: 'Pick a session to view its specs',
+    empty: 'No specs yet (generated for multi-step pipelines)',
     refresh: 'Refresh',
     save: 'Save',
     saved: 'Saved',
@@ -365,14 +431,14 @@ export const en: Dict = {
       mentionTitle: '@Agent direct',
       mentionDesc: '@coder fix this, @reviewer review',
       slashTitle: '/ Quick commands',
-      slashDesc: '/plan to draft, /tasks to track'
+      slashDesc: '/spec to draft, /tasks to track'
     },
     toolbar: {
       group: 'Group settings',
       taskTitle: 'Task panel',
       task: 'Tasks',
-      planTitle: 'Plan docs (requirements / design / tasks)',
-      plan: 'Plans',
+      specTitle: 'Spec docs (requirements / design / tasks)',
+      spec: 'Specs',
       filesTitle: 'Workspace file changes & commit history',
       files: 'Files',
       diffTitle: 'View diff',
@@ -568,7 +634,11 @@ export const en: Dict = {
       providerHint:
         'Default uses the local {adapter} login/config; custom makes only this agent use the provider you enter. codex and claude-code are stored independently',
       providerModeDefault: 'Default (local config)',
+      providerModeProfile: 'Provider',
       providerModeCustom: 'Custom',
+      profileSelect: 'Select a provider profile…',
+      profileEmpty: 'No provider profiles for this tool; create one on the Providers page',
+      profilePick: 'Please select a provider profile',
       localConfig: 'Detected local config',
       rescan: 'Rescan',
       scanning: 'Scanning…',

@@ -18,6 +18,6 @@ export const RIGHT_DOCK_TABS: { key: RightTab; icon: LucideIcon; labelKey: strin
   { key: 'review', icon: FileDiff, labelKey: 'nav.diff' },
   { key: 'preview', icon: Monitor, labelKey: 'nav.preview' },
   { key: 'deploy', icon: Send, labelKey: 'nav.deploy' },
-  { key: 'plan', icon: FileText, labelKey: 'rightDock.plan' },
+  { key: 'spec', icon: FileText, labelKey: 'rightDock.spec' },
   { key: 'git', icon: Files, labelKey: 'rightDock.git' }
 ]

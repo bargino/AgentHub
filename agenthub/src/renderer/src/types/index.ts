@@ -8,8 +8,8 @@ export type TaskStatus =
   | 'cancelled'
 export type AgentRole = string
 export type RiskLevel = 'low' | 'medium' | 'high'
-/** 右侧工作区单实例 tab：概览 / 任务 / 审查(diff) / 预览 / 部署 / 计划 / Git */
-export type RightTab = 'overview' | 'task' | 'review' | 'preview' | 'deploy' | 'plan' | 'git'
+/** 右侧工作区单实例 tab：概览 / 任务 / 审查(diff) / 预览 / 部署 / spec / Git */
+export type RightTab = 'overview' | 'task' | 'review' | 'preview' | 'deploy' | 'spec' | 'git'
 
 export interface Conversation {
   id: string
@@ -54,8 +54,8 @@ export interface Message {
     thinkingMs?: number
     /** 规划期澄清（Phase 1a）：Orchestrator 发问 + 候选项，前端渲染为快捷按钮 */
     clarify?: { question?: string; options: string[]; recommended?: number }
-    /** 计划确认门禁（Phase 1b）：pipeline 任务计划待用户批准/取消 */
-    planConfirm?: { goal?: string; taskCount?: number }
+    /** spec 确认门禁（Phase 1b）：pipeline 任务 spec 待用户批准/取消 */
+    specConfirm?: { goal?: string; taskCount?: number }
   }
   /** 多模态图片附件（前端用 base64 data URL 展示缩略图；当前会话内有效） */
   attachments?: { type: 'image'; url: string; filename?: string }[]
@@ -137,15 +137,26 @@ export interface Approval {
   diffId?: string | null
 }
 
-export type ProviderMode = 'default' | 'custom'
+export type ProviderMode = 'default' | 'custom' | 'profile'
 
-/** 单个适配器的供应商配置。mode=default 走本地 CLI 登录态；custom 注入 baseUrl/authToken。
- *  model 与该适配器供应商绑定（按适配器各自保存，避免切换后用到不存在的模型）。 */
+/** 单个适配器的供应商配置。default=走本地 CLI 登录态；custom=内联 baseUrl/authToken；
+ *  profile=引用命名供应商档案（profileId）。model 与该适配器供应商绑定（按适配器各自保存）。 */
 export interface ProviderConfig {
   mode: ProviderMode
   baseUrl: string
   authToken: string
   model: string
+  profileId: string
+}
+
+/** 命名供应商档案（参照 cc-switch）：某工具(claude-code/codex)的完整供应商配置，供 Agent 引用。 */
+export interface ProviderProfile {
+  id: string
+  tool: string
+  name: string
+  config: Record<string, string>
+  isPreset: boolean
+  sortOrder: number
 }
 
 /** 按适配器类型分组的供应商配置（codex / claude-code 各自独立）。 */

@@ -8,6 +8,7 @@ export const zhCN: Dict = {
     create: '创建',
     confirm: '确定',
     delete: '删除',
+    edit: '编辑',
     close: '关闭',
     back: '返回',
     colon: '：',
@@ -32,8 +33,73 @@ export const zhCN: Dict = {
     preview: '预览',
     deploy: '部署',
     agents: 'Agent',
+    providers: '供应商',
     manage: '管理中心',
     settings: '设置'
+  },
+  providers: {
+    page: {
+      title: '供应商配置',
+      subtitle: '管理 Claude Code / Codex 的命名供应商档案（参照 cc-switch），供 Agent 引用',
+      add: '新建档案',
+      loading: '加载供应商档案…',
+      loadErrorTitle: '加载失败',
+      loadErrorDesc: '无法获取供应商档案，请确认引擎已就绪后重试',
+      retry: '重试',
+      emptyTitle: '暂无档案',
+      emptyDesc: '点击右上角「新建档案」，或复制一个内置预设开始'
+    },
+    form: {
+      preset: '从预设模板',
+      presetHint: '选择一个供应商模板快速预填（迁移自 cc-switch），再填入你的 API Key',
+      presetSelect: '选择预设模板…',
+      presetSearch: '搜索预设…',
+      presetNoResult: '无匹配预设',
+      name: '档案名称',
+      namePlaceholder: '如 DeepSeek-生产、GLM-个人',
+      baseUrlHint: '留空走该工具本地登录态',
+      model: '模型',
+      modelPlaceholder: '留空使用 SDK 默认模型',
+      wireApi: 'Wire API',
+      wireApiHint: '第三方多用 chat，官方/兼容用 responses',
+      reasoning: '推理强度',
+      reasoningHint: 'codex model_reasoning_effort',
+      reasoningDefault: '默认',
+      getApiKey: '获取 API Key',
+      fetchModels: '拉取模型',
+      fetching: '拉取中…',
+      speedTest: '测速',
+      testing: '测速中…',
+      unreachable: '不可达'
+    },
+    category: {
+      official: '官方',
+      cn_official: '国产官方',
+      aggregator: '聚合中转',
+      custom: '自定义'
+    },
+    modal: {
+      addTitle: '新建 {tool} 供应商档案',
+      editTitle: '编辑 {tool} 供应商档案'
+    },
+    card: {
+      preset: '预设',
+      localLogin: '本地登录态',
+      none: '未设置',
+      duplicate: '复制',
+      copySuffix: '副本',
+      confirmDelete: '确认删除'
+    },
+    notify: {
+      saveFailed: '保存失败',
+      loadFailed: '加载失败',
+      deleteFailed: '删除失败',
+      retry: '请稍后重试',
+      needBaseUrl: '请先填写 Base URL',
+      modelsFetched: '已拉取 {count} 个模型',
+      fetchModelsFailed: '拉取模型失败',
+      speedTestFailed: '测速失败'
+    }
   },
   header: {
     invite: '邀请成员',
@@ -169,13 +235,13 @@ export const zhCN: Dict = {
   rightDock: {
     review: '审查',
     task: '任务',
-    plan: '计划',
+    spec: 'spec',
     git: 'Git',
     preview: '预览'
   },
-  plan: {
-    noConversation: '选择一个会话查看其计划',
-    empty: '暂无计划（多步 pipeline 任务才会生成）',
+  spec: {
+    noConversation: '选择一个会话查看其 spec',
+    empty: '暂无 spec（多步 pipeline 任务才会生成）',
     refresh: '刷新',
     save: '保存',
     saved: '已保存',
@@ -362,14 +428,14 @@ export const zhCN: Dict = {
       mentionTitle: '@Agent 直达',
       mentionDesc: '@coder 改这里、@reviewer 审查',
       slashTitle: '/ 快捷命令',
-      slashDesc: '/plan 出计划、/tasks 看进度'
+      slashDesc: '/spec 出 spec、/tasks 看进度'
     },
     toolbar: {
       group: '群设置',
       taskTitle: '任务面板',
       task: '任务',
-      planTitle: '计划文档（需求 / 设计 / 任务三件套）',
-      plan: '计划',
+      specTitle: 'spec 文档（需求 / 设计 / 任务三件套）',
+      spec: 'spec',
       filesTitle: '工作区文件变更与提交历史',
       files: '文件',
       diffTitle: 'Diff 查看',
@@ -564,7 +630,11 @@ export const zhCN: Dict = {
       providerHint:
         '默认走本地 {adapter} 登录态/配置；自定义则仅该 Agent 使用填写的供应商。codex 与 claude-code 各自独立保存',
       providerModeDefault: '默认（本地配置）',
+      providerModeProfile: '供应商',
       providerModeCustom: '自定义',
+      profileSelect: '选择供应商档案…',
+      profileEmpty: '暂无该工具的供应商档案，请到「供应商」页创建',
+      profilePick: '请选择一个供应商档案',
       localConfig: '检测到的本地配置',
       rescan: '重新扫描',
       scanning: '扫描中…',

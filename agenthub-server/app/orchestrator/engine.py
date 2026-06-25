@@ -17,7 +17,7 @@ from app.core.message_handler import IMessageHandler
 from app.db.engine import get_session_factory
 from app.memory import conversation_memory, progress_log, project_memory, summary, token_meter
 from app.orchestrator.task_executor import ExecutionState, execute_plan
-from app.orchestrator.task_planner import Decision, PlannedTask, TaskPlan, decide
+from app.orchestrator.task_planner import Decision, SpecTask, TaskSpec, analyze_spec, decide
 from app.services import conversation as conversation_service
 from app.services import event_store
 from app.services import message as message_service
@@ -29,15 +29,15 @@ logger = logging.getLogger(__name__)
 # #1-B 失败重规划封顶轮数（防无限重规划）；0 = 关闭重规划。
 _MAX_REPLAN_ATTEMPTS = max(0, int(os.environ.get("AGENTHUB_MAX_REPLAN_ATTEMPTS") or "1"))
 
-# Phase 1b 计划确认门禁：pipeline 计划等用户批准期间的内存暂存
-# （conversation_id -> (ExecutionState, TaskPlan, collab_intensity, created_monotonic)）。
+# Phase 1b spec确认门禁：pipeline spec等用户批准期间的内存暂存
+# （conversation_id -> (ExecutionState, TaskSpec, collab_intensity, created_monotonic)）。
 # D：加 TTL 防内存泄漏/久挂；内存丢失（重启）时由 _reconstruct_pending 从 DB pending 任务重建。
-_PENDING_PLANS: dict[str, tuple["ExecutionState", "TaskPlan", "str | None", float]] = {}
-# D：pending 计划存活上限（秒），超时视为失效并取消其任务
+_PENDING_SPECS: dict[str, tuple["ExecutionState", "TaskSpec", "str | None", float]] = {}
+# D：pending spec存活上限（秒），超时视为失效并取消其任务
 _PENDING_TTL_S = max(60, int(os.environ.get("AGENTHUB_PENDING_PLAN_TTL_S") or "1800"))
 
 # Phase 1a 澄清轮数上限（防模型反复 clarify 打断用户）；0 = 禁用 clarify。
-# 在最近 _CLARIFY_WINDOW 条消息内已澄清达上限时，本轮禁止再 clarify（强制出计划）。
+# 在最近 _CLARIFY_WINDOW 条消息内已澄清达上限时，本轮禁止再 clarify（强制出spec）。
 _MAX_CLARIFY_ROUNDS = max(0, int(os.environ.get("AGENTHUB_MAX_CLARIFY_ROUNDS") or "1"))
 _CLARIFY_WINDOW = 8
 
@@ -83,16 +83,16 @@ def _fast_path_decision(content: str) -> "Decision | None":
     if len(text) <= 12 and _GREETING_RE.match(text):
         return Decision(
             mode="direct",
-            answer="你好，我在 👋 说说你想做什么，我可以直接帮你做，或先拆成任务计划。",
+            answer="你好，我在 👋 说说你想做什么，我可以直接帮你做，或先拆成任务spec。",
         )
     return None
 
 
 async def _reconstruct_pending(factory, conversation_id: str):
-    """D：内存丢失（重启）时，从 DB 的 pending 任务重建待执行计划上下文。
+    """D：内存丢失（重启）时，从 DB 的 pending 任务重建待执行spec上下文。
 
     任务本身已持久化在 DB；这里从 Conversation/Workspace/Task/最近 user 消息重建
-    ExecutionState + TaskPlan（PlannedTask.id 直接用 db_id，id_map 取恒等），供
+    ExecutionState + TaskSpec（SpecTask.id 直接用 db_id，id_map 取恒等），供
     resume/revise 在无内存暂存时仍能批准执行。无可重建数据时返回 None。
     """
     from sqlalchemy import select
@@ -129,7 +129,7 @@ async def _reconstruct_pending(factory, conversation_id: str):
         ).first()
         user_instructions = (umsg[0] if umsg else None) or conv.title or ""
         tasks = [
-            PlannedTask(
+            SpecTask(
                 id=t.id,
                 agent=t.agent_role,
                 title=t.title,
@@ -139,7 +139,7 @@ async def _reconstruct_pending(factory, conversation_id: str):
             )
             for t in rows
         ]
-        plan = TaskPlan(goal=conv.title or user_instructions[:80], tasks=tasks)
+        plan = TaskSpec(goal=conv.title or user_instructions[:80], tasks=tasks)
         id_map = {t.id: t.id for t in rows}
         state = ExecutionState(
             conversation_id=conversation_id,
@@ -157,9 +157,9 @@ async def _reconstruct_pending(factory, conversation_id: str):
 
 
 async def _take_pending(factory, conversation_id: str):
-    """取出待执行计划：优先内存（TTL 内有效）；过期则取消其任务并视为无；
+    """取出待执行spec：优先内存（TTL 内有效）；过期则取消其任务并视为无；
     内存无则从 DB 重建。返回 (state, plan, collab_intensity) 或 None。"""
-    p = _PENDING_PLANS.pop(conversation_id, None)
+    p = _PENDING_SPECS.pop(conversation_id, None)
     if p is not None:
         state, plan, collab_intensity, created = p
         if time.monotonic() - created <= _PENDING_TTL_S:
@@ -168,7 +168,7 @@ async def _take_pending(factory, conversation_id: str):
             async with session.begin():
                 for db_id in state.id_map.values():
                     await task_service.update_task_status(
-                        session, db_id, "cancelled", result="计划确认超时，已失效"
+                        session, db_id, "cancelled", result="spec确认超时，已失效"
                     )
         return None
     return await _reconstruct_pending(factory, conversation_id)
@@ -177,8 +177,8 @@ async def _take_pending(factory, conversation_id: str):
 def _sweep_expired_pending() -> None:
     """D：清除内存中已过 TTL 的暂存条目（防无界增长）；其 DB 任务由 _take_pending 兜底取消。"""
     now = time.monotonic()
-    for cid in [k for k, v in _PENDING_PLANS.items() if now - v[3] > _PENDING_TTL_S]:
-        _PENDING_PLANS.pop(cid, None)
+    for cid in [k for k, v in _PENDING_SPECS.items() if now - v[3] > _PENDING_TTL_S]:
+        _PENDING_SPECS.pop(cid, None)
 
 
 async def _record_planning(factory, conversation_id: str, trace_id: str, mode: str, task_count: int) -> None:
@@ -219,7 +219,7 @@ async def _run_review_loop(
     project_name: str,
     workspace_path: str,
     user_instructions: str,
-    plan: TaskPlan,
+    plan: TaskSpec,
     id_map: dict[str, str],
     member_ids: list[str],
     conv_rules: str,
@@ -228,8 +228,8 @@ async def _run_review_loop(
 ) -> None:
     """evaluator-optimizer 回环（对齐 Anthropic Building Effective Agents）。
 
-    Reviewer 判 needs_changes 时生成「修复→复审」迷你计划回灌，循环至 approve 或达
-    迭代上限。对无 reviewer / 首轮 approve 的计划是 no-op（现有行为零改变）。
+    Reviewer 判 needs_changes 时生成「修复→复审」迷你spec回灌，循环至 approve 或达
+    迭代上限。对无 reviewer / 首轮 approve 的spec是 no-op（现有行为零改变）。
     """
     from app.orchestrator.review import (
         MAX_REVIEW_ITERATIONS,
@@ -260,11 +260,11 @@ async def _run_review_loop(
         iteration += 1
 
         fix_instructions = compose_fix_instructions(user_instructions, issues)
-        fix_plan = TaskPlan(
+        fix_plan = TaskSpec(
             goal=f"修复审查问题（第 {iteration} 轮）",
             tasks=[
-                PlannedTask(id="fix", agent="coder", title=f"修复审查问题（第 {iteration} 轮）", depends_on=[]),
-                PlannedTask(id="rev", agent="reviewer", title=f"复审（第 {iteration} 轮）", depends_on=["fix"]),
+                SpecTask(id="fix", agent="coder", title=f"修复审查问题（第 {iteration} 轮）", depends_on=[]),
+                SpecTask(id="rev", agent="reviewer", title=f"复审（第 {iteration} 轮）", depends_on=["fix"]),
             ],
         )
         async with factory() as session:
@@ -329,8 +329,8 @@ async def _run_review_loop(
                 )
 
 
-async def _collect_failed_tasks(factory, plan: TaskPlan, id_map: dict[str, str]) -> list[tuple[str, str]]:
-    """收集计划中状态为 failed 的任务 (标题, 失败原因)；不含级联 cancelled。"""
+async def _collect_failed_tasks(factory, plan: TaskSpec, id_map: dict[str, str]) -> list[tuple[str, str]]:
+    """收集spec中状态为 failed 的任务 (标题, 失败原因)；不含级联 cancelled。"""
     out: list[tuple[str, str]] = []
     async with factory() as session:
         for planned in plan.tasks:
@@ -343,8 +343,8 @@ async def _collect_failed_tasks(factory, plan: TaskPlan, id_map: dict[str, str])
     return out
 
 
-async def _collect_task_statuses(factory, plan: TaskPlan, id_map: dict[str, str]) -> list[tuple[str, str]]:
-    """收集计划中各任务 (标题, 最终状态)，供 #9a 进展记忆写入。"""
+async def _collect_task_statuses(factory, plan: TaskSpec, id_map: dict[str, str]) -> list[tuple[str, str]]:
+    """收集spec中各任务 (标题, 最终状态)，供 #9a 进展记忆写入。"""
     out: list[tuple[str, str]] = []
     async with factory() as session:
         for planned in plan.tasks:
@@ -363,7 +363,7 @@ async def _run_failure_replan(
     project_name: str,
     workspace_path: str,
     user_instructions: str,
-    plan: TaskPlan,
+    plan: TaskSpec,
     id_map: dict[str, str],
     member_ids: list[str],
     collab_intensity,
@@ -373,7 +373,7 @@ async def _run_failure_replan(
 ) -> None:
     """#1-B 失败重规划（对齐 orchestrator-workers 动态分解）。
 
-    主计划存在 failed 任务时，把失败原因喂回 decide() 做局部重规划并执行，封顶
+    主spec存在 failed 任务时，把失败原因喂回 decide() 做局部重规划并执行，封顶
     _MAX_REPLAN_ATTEMPTS 轮。无失败时 no-op（现有行为零改变）。
     """
     from app.orchestrator.task_planner import compose_replan_instructions
@@ -399,7 +399,7 @@ async def _run_failure_replan(
             )
             if summary_text:
                 conv_context = f"[早期对话摘要]\n{summary_text}\n\n{conv_context}"
-            # ④ 跨会话项目知识（蒸馏沉淀）注入重规划，使补救计划同样对齐既有约定/决策
+            # ④ 跨会话项目知识（蒸馏沉淀）注入重规划，使补救spec同样对齐既有约定/决策
             project_knowledge = await project_memory.render_project_context(
                 session, project_name
             )
@@ -435,7 +435,7 @@ async def _run_failure_replan(
                         agent_name="Orchestrator",
                     )
             return
-        recovery_plan = decision.plan
+        recovery_plan = decision.spec
         if recovery_plan is None or not recovery_plan.tasks:
             return
         async with factory() as session:
@@ -474,10 +474,10 @@ async def _run_failure_replan(
 
 
 async def rerun_task(conversation_id: str, task_id: str) -> None:
-    """重试单个 failed/cancelled 任务：重建执行上下文并以单任务计划重新调度执行。
+    """重试单个 failed/cancelled 任务：重建执行上下文并以单任务spec重新调度执行。
 
     由 REST /tasks/{id}/retry 以后台任务方式拉起，弥补"仅改状态不执行"的缺陷：
-    复用 handle() 的会话/工作区准备逻辑，构造仅含该任务的 TaskPlan（依赖置空，
+    复用 handle() 的会话/工作区准备逻辑，构造仅含该任务的 TaskSpec（依赖置空，
     上游已完成），交给 execute_plan 真正重新跑一遍。
     """
     factory = get_session_factory()
@@ -515,9 +515,9 @@ async def rerun_task(conversation_id: str, task_id: str) -> None:
                 # 置回 pending：清上一轮执行痕迹（execute_plan 再置 running）
                 await task_service.update_task_status(session, task_id, "pending")
 
-        plan = TaskPlan(
+        plan = TaskSpec(
             goal=f"重试任务：{title}",
-            tasks=[PlannedTask(id="retry", agent=agent_role, title=title, depends_on=[])],
+            tasks=[SpecTask(id="retry", agent=agent_role, title=title, depends_on=[])],
         )
         state = ExecutionState(
             conversation_id=conversation_id,
@@ -545,13 +545,13 @@ async def rerun_task(conversation_id: str, task_id: str) -> None:
 async def _execute_and_finalize(
     factory,
     state: "ExecutionState",
-    plan: TaskPlan,
+    plan: TaskSpec,
     collab_intensity: str | None,
     mode: str,
 ) -> None:
     """执行 DAG + 收口 + 复审回环 + 失败重规划 + 进展记忆 + 滚动压缩。
 
-    供 handle()（single 立即执行）与 resume_plan()（pipeline 经计划确认门禁批准后执行）共用。
+    供 handle()（single 立即执行）与 resume_spec()（pipeline 经spec确认门禁批准后执行）共用。
     """
     conversation_id = state.conversation_id
     project_name = state.project_name
@@ -600,7 +600,7 @@ async def _execute_and_finalize(
             trace_id=trace_id,
         )
 
-    # 4c. #1-B 失败重规划：主计划有 failed 任务则把失败原因喂回 decide() 局部重规划（封顶）
+    # 4c. #1-B 失败重规划：主spec有 failed 任务则把失败原因喂回 decide() 局部重规划（封顶）
     if mode in ("single", "pipeline"):
         await _run_failure_replan(
             factory,
@@ -628,11 +628,11 @@ async def _execute_and_finalize(
                 task_lines=statuses,
                 conclusion=f"{success_n}/{len(statuses)} 任务成功",
             )
-            # C：把执行结果回写计划（活文档）；仅 pipeline 有计划文件
+            # C：把执行结果回写spec（活文档）；仅 pipeline 有spec文件
             if mode == "pipeline":
-                from app.services import plan_store
+                from app.services import spec_store
 
-                plan_store.append_outcome(workspace_path, conversation_id, trace_id, statuses)
+                spec_store.append_outcome(workspace_path, conversation_id, trace_id, statuses)
         except Exception:
             logger.warning("progress.md 收口写入失败", exc_info=True)
 
@@ -651,10 +651,10 @@ async def _execute_and_finalize(
         logger.warning("Conversation summary compression failed", exc_info=True)
 
 
-async def resume_plan(conversation_id: str, approved: bool) -> bool:
-    """计划确认门禁的恢复入口（Phase 1b）：批准则执行暂存的 pipeline 计划，否则取消。
+async def resume_spec(conversation_id: str, approved: bool) -> bool:
+    """spec确认门禁的恢复入口（Phase 1b）：批准则执行暂存的 pipeline spec，否则取消。
 
-    返回 True 表示找到并处理了暂存计划；False 表示无暂存（已执行 / 已过期 / 进程重启丢失），
+    返回 True 表示找到并处理了暂存spec；False 表示无暂存（已执行 / 已过期 / 进程重启丢失），
     此时给用户一条提示，便于重发需求。
     """
     factory = get_session_factory()
@@ -666,7 +666,7 @@ async def resume_plan(conversation_id: str, approved: bool) -> bool:
                     session,
                     conversation_id,
                     type="system",
-                    content="该任务计划已失效（可能已执行或服务重启），请重新发送需求。",
+                    content="该任务spec已失效（可能已执行或服务重启），请重新发送需求。",
                 )
         return False
 
@@ -677,13 +677,13 @@ async def resume_plan(conversation_id: str, approved: bool) -> bool:
             async with session.begin():
                 for db_id in state.id_map.values():
                     await task_service.update_task_status(
-                        session, db_id, "cancelled", result="用户取消了任务计划"
+                        session, db_id, "cancelled", result="用户取消了任务spec"
                     )
                 await message_service.append_message(
                     session,
                     conversation_id,
                     type="agent",
-                    content="已取消该任务计划。",
+                    content="已取消该任务spec。",
                     agent_role="orchestrator",
                     agent_name="Orchestrator",
                 )
@@ -696,7 +696,7 @@ async def resume_plan(conversation_id: str, approved: bool) -> bool:
                 await conversation_service.update_status(session, conversation_id, "running")
         await _execute_and_finalize(factory, state, plan, collab_intensity, "pipeline")
     except Exception:
-        logger.exception("resume_plan 执行失败：%s", conversation_id)
+        logger.exception("resume_spec 执行失败：%s", conversation_id)
     finally:
         try:
             async with factory() as session:
@@ -707,8 +707,8 @@ async def resume_plan(conversation_id: str, approved: bool) -> bool:
     return True
 
 
-async def revise_plan(conversation_id: str, feedback: str) -> bool:
-    """A：计划修改入口——取消旧未确认计划，把用户修改意见并入原需求重新规划（再次走门禁）。
+async def revise_spec(conversation_id: str, feedback: str) -> bool:
+    """A：spec修改入口——取消旧未确认spec，把用户修改意见并入原需求重新规划（再次走门禁）。
 
     返回 True 表示找到暂存并已触发重规划；False 表示无暂存（已执行/过期/重启）。
     """
@@ -721,7 +721,7 @@ async def revise_plan(conversation_id: str, feedback: str) -> bool:
                     session,
                     conversation_id,
                     type="system",
-                    content="该任务计划已失效（可能已执行或服务重启），请重新发送需求。",
+                    content="该任务spec已失效（可能已执行或服务重启），请重新发送需求。",
                 )
         return False
 
@@ -730,12 +730,12 @@ async def revise_plan(conversation_id: str, feedback: str) -> bool:
         async with session.begin():
             for db_id in state.id_map.values():
                 await task_service.update_task_status(
-                    session, db_id, "cancelled", result="计划按用户修改意见重做"
+                    session, db_id, "cancelled", result="spec按用户修改意见重做"
                 )
 
     original = state.user_instructions or ""
     revised = (
-        f"{original}\n\n## 用户对上一版计划的修改意见（请据此重新规划）\n{feedback.strip()}"
+        f"{original}\n\n## 用户对上一版spec的修改意见（请据此重新规划）\n{feedback.strip()}"
     )
     from app.core.message_handler import get_message_handler
 
@@ -775,10 +775,10 @@ class OrchestratorEngine(IMessageHandler):
             if target_agent and target_agent in known_roles:
                 decision = Decision(
                     mode="single",
-                    plan=TaskPlan(
+                    spec=TaskSpec(
                         goal=content[:80],
                         tasks=[
-                            PlannedTask(
+                            SpecTask(
                                 id="t1",
                                 agent=target_agent,
                                 title=f"@{target_agent}: {content[:60]}",
@@ -802,18 +802,18 @@ class OrchestratorEngine(IMessageHandler):
                         )
                         if summary_text:
                             conv_context = f"[早期对话摘要]\n{summary_text}\n\n{conv_context}"
-                        # ④ 跨会话项目知识（蒸馏沉淀）一并喂规划器，使计划对齐既有约定/决策
+                        # ④ 跨会话项目知识（蒸馏沉淀）一并喂规划器，使spec对齐既有约定/决策
                         project_knowledge = await project_memory.render_project_context(
                             session, project_name
                         )
-                    # Phase 4：把项目宪法（AGENTHUB.md + 全局规则）喂给规划器，使计划对齐宪法
+                    # Phase 4：把项目宪法（AGENTHUB.md + 全局规则）喂给规划器，使spec对齐宪法
                     from app.orchestrator.context_builder import load_custom_rules
 
                     constitution = load_custom_rules(workspace_path)
                     project_context = "\n\n".join(
                         p for p in (constitution, project_knowledge) if p
                     )
-                    # Phase 1a 澄清轮数上限：近窗口已达上限则本轮禁止再 clarify（强制出计划）
+                    # Phase 1a 澄清轮数上限：近窗口已达上限则本轮禁止再 clarify（强制出spec）
                     allow_clarify = (
                         await _recent_clarify_count(factory, conversation_id)
                     ) < _MAX_CLARIFY_ROUNDS
@@ -865,8 +865,8 @@ class OrchestratorEngine(IMessageHandler):
                 await _record_planning(factory, conversation_id, trace_id, "clarify", 0)
                 return
 
-            # 3b. single/pipeline：落任务；仅 pipeline 发任务计划消息（single 直接执行）
-            plan = decision.plan
+            # 3b. single/pipeline：落任务；仅 pipeline 发任务spec消息（single 直接执行）
+            plan = decision.spec
             if plan is None or not plan.tasks:
                 return
             async with factory() as session:
@@ -897,11 +897,11 @@ class OrchestratorEngine(IMessageHandler):
             # #7 规划阶段埋点（补 decide 阶段缺失的 record_event，含 trace_id）
             await _record_planning(factory, conversation_id, trace_id, decision.mode, len(plan.tasks))
 
-            # Phase 0 计划落盘：仅 pipeline（复杂多步）写可评审的 spec 文档（SDD 第一类 artifact）
+            # Phase 0 spec落盘：仅 pipeline（复杂多步）写可评审的 spec 文档（SDD 第一类 artifact）
             if decision.mode == "pipeline":
-                from app.services import plan_store
+                from app.services import spec_store
 
-                plan_store.write_plan(
+                spec_store.write_spec(
                     workspace_path,
                     plan,
                     conversation_id=conversation_id,
@@ -909,7 +909,7 @@ class OrchestratorEngine(IMessageHandler):
                     instructions=content,
                 )
                 # item 2：同时落 Spec Kit 三件套（requirements/design/tasks.md）供文件级评审/逐条编辑
-                plan_store.write_plan_triplet(
+                spec_store.write_spec_triplet(
                     workspace_path,
                     plan,
                     conversation_id=conversation_id,
@@ -929,25 +929,31 @@ class OrchestratorEngine(IMessageHandler):
                 conv_skills=conv_skills,
                 trace_id=trace_id,
             )
-            # Phase 1b 计划确认门禁：pipeline 不立即执行——暂存计划 + 发"计划+待确认"卡片 + return；
-            # 用户经 POST /conversations/{id}/plan/confirm 批准后由 resume_plan 执行；single 直接执行。
+            # Phase 1b spec确认门禁：pipeline 不立即执行——暂存spec + 发"spec+待确认"卡片 + return；
+            # 用户经 POST /conversations/{id}/spec/confirm 批准后由 resume_spec 执行；single 直接执行。
             if decision.mode == "pipeline":
                 _sweep_expired_pending()  # D：顺带清理其它会话已过期的暂存条目
-                # 覆盖前清理上一份未确认计划的 pending 任务，避免孤儿（用户门禁期重发需求时）
-                stale = _PENDING_PLANS.pop(conversation_id, None)
+                # 覆盖前清理上一份未确认spec的 pending 任务，避免孤儿（用户门禁期重发需求时）
+                stale = _PENDING_SPECS.pop(conversation_id, None)
                 if stale is not None:
                     async with factory() as session:
                         async with session.begin():
                             for db_id in stale[0].id_map.values():
                                 await task_service.update_task_status(
-                                    session, db_id, "cancelled", result="计划被新需求取代"
+                                    session, db_id, "cancelled", result="spec被新需求取代"
                                 )
-                _PENDING_PLANS[conversation_id] = (state, plan, collab_intensity, time.monotonic())
-                # 计划详情 + 确认按钮合并为一条消息（meta.planConfirm 驱动前端按钮）
-                plan_lines = [f"**任务计划**：{plan.goal}", ""]
+                _PENDING_SPECS[conversation_id] = (state, plan, collab_intensity, time.monotonic())
+                # P1：执行前做一次 SDD Analyze 一致性核对，把告警 + 非目标 surfaced 到确认卡片
+                spec_warnings = analyze_spec(plan)
+                # spec详情 + 确认按钮合并为一条消息（meta.planConfirm 驱动前端按钮）
+                plan_lines = [f"**任务spec**：{plan.goal}", ""]
                 for i, t in enumerate(plan.tasks, 1):
                     dep = f"（依赖 {', '.join(t.depends_on)}）" if t.depends_on else ""
                     plan_lines.append(f"{i}. {t.title} `@{t.agent}`{dep}")
+                if plan.out_of_scope:
+                    plan_lines += ["", "**非目标**：" + "；".join(plan.out_of_scope)]
+                if spec_warnings:
+                    plan_lines += ["", "**⚠ 一致性提示**：", *[f"- {w}" for w in spec_warnings]]
                 plan_lines += ["", "请确认后执行。"]
                 async with factory() as session:
                     async with session.begin():
@@ -959,9 +965,12 @@ class OrchestratorEngine(IMessageHandler):
                             agent_role="orchestrator",
                             agent_name="Orchestrator",
                             meta={
+                                # 保留 planConfirm 键名（前端契约，Wave 2 再随前端同步改 specConfirm）
                                 "planConfirm": {
                                     "goal": plan.goal,
                                     "taskCount": len(plan.tasks),
+                                    "analyze": spec_warnings,
+                                    "outOfScope": plan.out_of_scope,
                                 }
                             },
                         )

@@ -135,6 +135,8 @@ class ProviderConfig(CamelModel):
     base_url: str = ""
     auth_token: str = ""
     model: str = ""
+    # mode=profile 时引用的命名供应商档案 id（ProviderProfileRecord.id）
+    profile_id: str = ""
 
 
 class ProviderScanOut(CamelModel):
@@ -146,6 +148,58 @@ class ProviderScanOut(CamelModel):
     model: str = ""
     auth_source: str = ""
     config_path: str = ""
+
+
+class ProviderProfileOut(CamelModel):
+    """命名供应商档案（参照 cc-switch）：某工具的完整供应商配置，供 Agent 引用。"""
+
+    id: str
+    tool: str
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    is_preset: bool = False
+    sort_order: int = 0
+
+
+class ProviderProfileCreate(CamelModel):
+    tool: str
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderProfileUpdate(CamelModel):
+    name: Optional[str] = None
+    config: Optional[dict[str, Any]] = None
+    sort_order: Optional[int] = None
+
+
+class ProviderModelsRequest(CamelModel):
+    """拉取某供应商可用模型列表（参照 cc-switch fetch models）。"""
+
+    tool: str
+    base_url: str = ""
+    auth_token: str = ""
+
+
+class ProviderModelsOut(CamelModel):
+    models: list[str] = Field(default_factory=list)
+
+
+class EndpointSpeedRequest(CamelModel):
+    """对一组请求地址做可达性/延迟测速（参照 cc-switch EndpointSpeedTest）。"""
+
+    urls: list[str] = Field(default_factory=list)
+
+
+class EndpointSpeedResult(CamelModel):
+    url: str
+    ok: bool = False
+    ms: int = 0
+    status: int = 0
+
+
+class EndpointSpeedOut(CamelModel):
+    results: list[EndpointSpeedResult] = Field(default_factory=list)
 
 
 class SkillSpec(CamelModel):
@@ -265,14 +319,14 @@ class RollbackIn(CamelModel):
     message_id: str
 
 
-class PlanReviseIn(CamelModel):
-    """A：计划修改门禁——用户对待确认计划的修改意见。"""
+class SpecReviseIn(CamelModel):
+    """A：spec修改门禁——用户对待确认spec的修改意见。"""
 
     feedback: str
 
 
-class PlanFileOut(CamelModel):
-    """item 2：计划文件元信息（Spec Kit 三件套 + 合并版）。"""
+class SpecFileOut(CamelModel):
+    """item 2：spec文件元信息（Spec Kit 三件套 + 合并版）。"""
 
     name: str
     path: str
@@ -280,8 +334,8 @@ class PlanFileOut(CamelModel):
     mtime: str
 
 
-class PlanFileWrite(CamelModel):
-    """item 2：计划文件级逐条编辑写入。"""
+class SpecFileWrite(CamelModel):
+    """item 2：spec文件级逐条编辑写入。"""
 
     path: str
     content: str

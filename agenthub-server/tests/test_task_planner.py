@@ -12,22 +12,25 @@ from app.orchestrator.task_planner import (
     _HIGH_COMPLEXITY,
     _MIN_DECISION_CONFIDENCE,
     Decision,
-    PlannedTask,
+    SpecTask,
+    TaskSpec,
     _extract_json,
     _fallback_decision,
     _first_json_object,
     _is_dag,
     _parse_decision,
+    _parse_str_list,
     _parse_tasks,
     _reconcile_low_confidence,
     _self_assessment,
+    analyze_spec,
 )
 
 VALID_AGENTS = {"planner", "coder", "reviewer", "deployer"}
 
 
-def _task(tid: str, deps: list[str] | None = None, agent: str = "coder") -> PlannedTask:
-    return PlannedTask(id=tid, agent=agent, title=f"task {tid}", depends_on=deps or [])
+def _task(tid: str, deps: list[str] | None = None, agent: str = "coder") -> SpecTask:
+    return SpecTask(id=tid, agent=agent, title=f"task {tid}", depends_on=deps or [])
 
 
 # ---- _is_dag：拓扑可达性 ----
@@ -63,7 +66,7 @@ def test_first_json_object_plain() -> None:
 
 
 def test_first_json_object_with_prefix_text() -> None:
-    assert _first_json_object('好的，计划如下：{"a": 1} 完成') == '{"a": 1}'
+    assert _first_json_object('好的，spec如下：{"a": 1} 完成') == '{"a": 1}'
 
 
 def test_first_json_object_brace_inside_string() -> None:
@@ -120,7 +123,7 @@ def test_self_assessment(data: dict, expected: tuple[float, int]) -> None:
     assert _self_assessment(data) == expected
 
 
-# ---- _parse_tasks：DAG 计划构建与非法拦截 ----
+# ---- _parse_tasks：DAG spec构建与非法拦截 ----
 
 
 def test_parse_tasks_valid_pipeline() -> None:
@@ -197,8 +200,8 @@ def test_parse_decision_single_valid() -> None:
     d = _parse_decision('{"mode": "single", "agent": "coder", "title": "do"}', VALID_AGENTS)
     assert d is not None
     assert d.mode == "single"
-    assert d.plan is not None
-    assert d.plan.tasks[0].agent == "coder"
+    assert d.spec is not None
+    assert d.spec.tasks[0].agent == "coder"
 
 
 def test_parse_decision_single_invalid_agent_none() -> None:
@@ -229,8 +232,8 @@ def test_parse_decision_pipeline_valid() -> None:
     d = _parse_decision(raw, VALID_AGENTS)
     assert d is not None
     assert d.mode == "pipeline"
-    assert d.plan is not None
-    assert len(d.plan.tasks) == 2
+    assert d.spec is not None
+    assert len(d.spec.tasks) == 2
 
 
 def test_parse_decision_unknown_mode_none() -> None:
@@ -243,15 +246,15 @@ def test_parse_decision_unknown_mode_none() -> None:
 def test_fallback_decision_prefers_coder() -> None:
     d = _fallback_decision("do something", VALID_AGENTS)
     assert d.mode == "single"
-    assert d.plan is not None
-    assert d.plan.tasks[0].agent == "coder"
+    assert d.spec is not None
+    assert d.spec.tasks[0].agent == "coder"
 
 
 def test_fallback_decision_deployer_only_forces_approval() -> None:
     d = _fallback_decision("ship", {"deployer"})
-    assert d.plan is not None
-    assert d.plan.tasks[0].agent == "deployer"
-    assert d.plan.tasks[0].requires_approval is True
+    assert d.spec is not None
+    assert d.spec.tasks[0].agent == "deployer"
+    assert d.spec.tasks[0].requires_approval is True
 
 
 # ---- _reconcile_low_confidence：低置信/高复杂回退 clarify（用模块常量避免 env 漂移）----
@@ -283,3 +286,81 @@ def test_reconcile_zero_confidence_not_treated_as_low() -> None:
     # confidence==0 视为模型未给自评，仅看 complexity（此处低 → 不纠偏）
     d = Decision(mode="single", confidence=0.0, complexity=0)
     assert _reconcile_low_confidence(d, allow_clarify=True).mode == "single"
+
+
+# ---- analyze_spec：SDD Analyze 阶段 spec↔tasks 一致性核对 ----
+
+
+def _acc_task(tid: str, agent: str, title: str, acc: str = "当X，系统应Y") -> SpecTask:
+    return SpecTask(id=tid, agent=agent, title=title, acceptance=acc)
+
+
+def test_analyze_spec_empty_plan() -> None:
+    assert analyze_spec(TaskSpec(goal="g", tasks=[])) == ["spec 为空：无任何任务"]
+
+
+def test_analyze_spec_clean_passes() -> None:
+    plan = TaskSpec(
+        goal="g",
+        tasks=[
+            _acc_task("t1", "coder", "实现登录"),
+            _acc_task("t2", "reviewer", "审查登录"),
+        ],
+    )
+    assert analyze_spec(plan) == []
+
+
+def test_analyze_spec_flags_missing_acceptance() -> None:
+    plan = TaskSpec(
+        goal="g",
+        tasks=[
+            _acc_task("t1", "coder", "实现", acc=""),
+            _acc_task("t2", "reviewer", "审查"),
+        ],
+    )
+    assert any("缺少 EARS" in w for w in analyze_spec(plan))
+
+
+def test_analyze_spec_flags_duplicate_titles() -> None:
+    plan = TaskSpec(
+        goal="g",
+        tasks=[_acc_task("t1", "coder", "改"), _acc_task("t2", "reviewer", "改")],
+    )
+    assert any("重复" in w for w in analyze_spec(plan))
+
+
+def test_analyze_spec_flags_coder_without_reviewer() -> None:
+    plan = TaskSpec(goal="g", tasks=[_acc_task("t1", "coder", "实现")])
+    assert any("reviewer" in w for w in analyze_spec(plan))
+
+
+# ---- _parse_str_list / outOfScope（P1：非目标端到端）----
+
+
+def test_parse_str_list_trims_and_drops_empty() -> None:
+    assert _parse_str_list(["a", " b ", "", "  ", "c"]) == ["a", "b", "c"]
+
+
+def test_parse_str_list_non_list_returns_empty() -> None:
+    assert _parse_str_list("x") == []
+    assert _parse_str_list(None) == []
+
+
+def test_parse_str_list_caps_item_count() -> None:
+    assert len(_parse_str_list([str(i) for i in range(50)])) == 12
+
+
+def test_task_plan_out_of_scope_default_empty() -> None:
+    assert TaskSpec(goal="g", tasks=[]).out_of_scope == []
+
+
+def test_parse_decision_pipeline_parses_out_of_scope() -> None:
+    raw = (
+        '{"mode": "pipeline", "goal": "g", '
+        '"tasks": [{"id": "t1", "agent": "coder", "title": "c"}], '
+        '"outOfScope": ["不改 schema", "  ", "不动 CI"]}'
+    )
+    d = _parse_decision(raw, VALID_AGENTS)
+    assert d is not None
+    assert d.spec is not None
+    assert d.spec.out_of_scope == ["不改 schema", "不动 CI"]

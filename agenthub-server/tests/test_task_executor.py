@@ -14,7 +14,7 @@ import pytest
 from app.db.engine import dispose_engine, get_session_factory, init_database
 from app.orchestrator import task_executor as te
 from app.orchestrator.task_executor import ExecutionState, execute_plan
-from app.orchestrator.task_planner import PlannedTask, TaskPlan
+from app.orchestrator.task_planner import SpecTask, TaskSpec
 from app.services import task as task_service
 
 _CID = "conv-1"
@@ -33,8 +33,8 @@ async def db(tmp_path, monkeypatch):
         await dispose_engine()
 
 
-def _p(tid: str, deps: list[str] | None = None, agent: str = "coder") -> PlannedTask:
-    return PlannedTask(id=tid, agent=agent, title=f"task {tid}", depends_on=deps or [])
+def _p(tid: str, deps: list[str] | None = None, agent: str = "coder") -> SpecTask:
+    return SpecTask(id=tid, agent=agent, title=f"task {tid}", depends_on=deps or [])
 
 
 class _Recorder:
@@ -58,7 +58,7 @@ def _fake_runner(rec: _Recorder, results: dict[str, bool] | None = None):
     """受控 _execute_ready_task 替身：记录调用/并发，按 id 返回成功或失败（默认成功）。"""
     table = results or {}
 
-    async def fake(state: ExecutionState, planned: PlannedTask, role_labels: dict) -> bool:
+    async def fake(state: ExecutionState, planned: SpecTask, role_labels: dict) -> bool:
         rec.start(planned.id)
         try:
             await asyncio.sleep(0.01)  # 让并行就绪任务有交错窗口，峰值并发才可观测
@@ -69,7 +69,7 @@ def _fake_runner(rec: _Recorder, results: dict[str, bool] | None = None):
     return fake
 
 
-async def _seed(plan: TaskPlan) -> dict[str, str]:
+async def _seed(plan: TaskSpec) -> dict[str, str]:
     """按 plan 在 DB 落库任务，返回 planned.id -> db task id。"""
     factory = get_session_factory()
     id_map: dict[str, str] = {}
@@ -113,7 +113,7 @@ async def _force_success(db_id: str) -> None:
 
 
 async def test_independent_tasks_run_in_parallel(db, monkeypatch) -> None:
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b")])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b")])
     id_map = await _seed(plan)
     rec = _Recorder()
     monkeypatch.setattr(te, "_execute_ready_task", _fake_runner(rec))
@@ -129,7 +129,7 @@ async def test_independent_tasks_run_in_parallel(db, monkeypatch) -> None:
 
 
 async def test_linear_chain_runs_in_order(db, monkeypatch) -> None:
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b", ["a"]), _p("c", ["b"])])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b", ["a"]), _p("c", ["b"])])
     id_map = await _seed(plan)
     rec = _Recorder()
     monkeypatch.setattr(te, "_execute_ready_task", _fake_runner(rec))
@@ -145,7 +145,7 @@ async def test_linear_chain_runs_in_order(db, monkeypatch) -> None:
 
 
 async def test_diamond_dag_parallel_middle(db, monkeypatch) -> None:
-    plan = TaskPlan(
+    plan = TaskSpec(
         goal="g",
         tasks=[_p("a"), _p("b", ["a"]), _p("c", ["a"]), _p("d", ["b", "c"])],
     )
@@ -166,7 +166,7 @@ async def test_diamond_dag_parallel_middle(db, monkeypatch) -> None:
 
 
 async def test_cascade_cancel_on_upstream_failure(db, monkeypatch) -> None:
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b", ["a"]), _p("c", ["b"])])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b", ["a"]), _p("c", ["b"])])
     id_map = await _seed(plan)
     rec = _Recorder()
     monkeypatch.setattr(te, "_execute_ready_task", _fake_runner(rec, {"a": False}))
@@ -183,7 +183,7 @@ async def test_cascade_cancel_on_upstream_failure(db, monkeypatch) -> None:
 
 
 async def test_breakpoint_resume_skips_completed(db, monkeypatch) -> None:
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b", ["a"])])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b", ["a"])])
     id_map = await _seed(plan)
     await _force_success(id_map["a"])  # 模拟上一轮 a 已完成
     rec = _Recorder()
@@ -201,7 +201,7 @@ async def test_breakpoint_resume_skips_completed(db, monkeypatch) -> None:
 
 async def test_ghost_pending_stranded_cancelled(db, monkeypatch) -> None:
     # b 依赖一个不存在的 id（DAG 校验后正常不达，此处测调度防御路径）
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b", ["ghost"])])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b", ["ghost"])])
     id_map = await _seed(plan)
     rec = _Recorder()
     monkeypatch.setattr(te, "_execute_ready_task", _fake_runner(rec))
@@ -217,7 +217,7 @@ async def test_ghost_pending_stranded_cancelled(db, monkeypatch) -> None:
 
 
 async def test_returns_mixed_success_fail_counts(db, monkeypatch) -> None:
-    plan = TaskPlan(goal="g", tasks=[_p("a"), _p("b")])
+    plan = TaskSpec(goal="g", tasks=[_p("a"), _p("b")])
     id_map = await _seed(plan)
     rec = _Recorder()
     monkeypatch.setattr(te, "_execute_ready_task", _fake_runner(rec, {"b": False}))
